@@ -1,18 +1,22 @@
 # APP-5258 · Validación biométrica Facephi — Identity Validation V2
 
-**Microservicio:** `onboarding-micro-person`  
-**Stack:** .NET 8 · MediatR · FluentValidation  
+**Versión definitiva** · 10 de agosto de 2026
+
+**Microservicio:** `onboarding-micro-person` · **Proyecto:** `src/micro-person-api`  
+**Stack:** .NET 8 · MediatR · FluentValidation · Clean Architecture  
 **Endpoint expuesto:** `POST /facephi/validate`  
 **Endpoint integrado:** `POST /onboarding/v2/identity` (Facephi Identity API)  
-**Épica:** APP-5222 · **Bloquea:** APP-5223 — Enrolamiento de Soft Token mediante validación biométrica Facephi  
-**Actualizado:** 10 de agosto de 2026
+**Épica:** APP-5222 · **Bloquea:** APP-5223 — Enrolamiento de Soft Token mediante validación biométrica Facephi
 
 ---
 
-> **Qué cambió respecto a la primera versión de este documento.** El equipo definió que los endpoints no deben
-> tener semántica de Soft Token: son genéricos de Facephi. Se descartaron los cinco endpoints propios, la base
-> de datos MongoDB nueva y la máquina de estados. El alcance real es **un solo endpoint que integra Identity
-> Validation V2**, con los datos mínimos que ese servicio recibe.
+> **Cómo usar este documento.** Las secciones 1 a 4 son el contexto y el contrato: léelas una vez. La
+> **sección 5 es la guía de trabajo**: nueve cambios, cada uno con su ruta de archivo exacta, el punto donde va
+> y el código. La sección 6 dice en qué orden aplicarlos para que el proyecto compile en cada paso.
+>
+> **Advertencia:** el código de la sección 5 se escribió a partir de la revisión del código actual, sin acceso
+> al repositorio ni al SDK de .NET, y **no ha sido compilado**. Los *namespaces* y las rutas se tomaron de los
+> archivos revisados; ajusta lo que difiera.
 
 ---
 
@@ -21,11 +25,11 @@
 1. Contexto y decisiones cerradas
 2. Contrato de Facephi — Identity Validation V2
 3. Tablas de códigos de resultado
-4. Lo que ya está implementado
-5. Lo que falta: regla de decisión y mapeo a HTTP
-6. Lo que falta: headers, binding y limpieza
+4. Estado actual de la implementación
+5. **Guía de cambios, archivo por archivo**
+6. Orden de aplicación y verificación
 7. Checklist de cierre
-8. Preguntas cerradas y abiertas
+8. Preguntas abiertas
 
 ---
 
@@ -35,8 +39,6 @@ Facephi ya estaba integrado en `onboarding-micro-person` para el proceso de onbo
 microservicio ni un flujo paralelo**: añade dentro del mismo micro la operación de validación biométrica que
 consumirá el enrolamiento de Soft Token (APP-5223).
 
-## 1.1 Decisiones tomadas por el equipo
-
 | Decisión | Resultado |
 |---|---|
 | ¿Endpoints propios de Soft Token? | **No.** Los endpoints son genéricos de Facephi. Nada de rutas, carpetas ni clases con "softtoken" en el nombre |
@@ -44,10 +46,10 @@ consumirá el enrolamiento de Soft Token (APP-5223).
 | ¿Datos mínimos? | Los que recibe ese endpoint: `token1`, `bestImageToken`, `method` y opcionalmente `tracking` |
 | ¿`requestId`? | No es relevante para nosotros |
 | ¿Persistencia en Mongo? | **Descartada.** La operación es sin estado: entra la captura, sale el veredicto |
-| ¿`token2` (dorso del documento)? | **No aplica.** Identity V2 no tiene ese campo. El modelo original del ticket debe corregirse |
+| ¿`token2` (dorso del documento)? | **No aplica.** Identity V2 no tiene ese campo. El modelo del ticket debe corregirse |
 | ¿Identity V2 o Authenticate User V2? | **Identity V2**, confirmado: el cliente escanea su cédula nuevamente al activar el token |
 
-## 1.2 Por qué Identity V2 y no Authenticate User V2
+## 1.1 Por qué Identity V2 y no Authenticate User V2
 
 `authenticateUser/v2` compara el `bestImageToken` del momento contra un **template biométrico almacenado**
 (`registeredTemplateRaw`) durante el onboarding. Evita volver a escanear el documento, pero obliga a persistir
@@ -73,8 +75,7 @@ Content-Type: application/json
 | `x-api-key` | **Sí** | API key de autorización |
 | `family` | Sí cuando se envía `tracking` | `OnBoarding` |
 
-> La documentación en español escribe `OnBoarding` y la inglesa `Onboarding`. Verificar cuál acepta el ambiente
-> antes de dar por buena la integración.
+> La documentación en español escribe `OnBoarding` y la inglesa `Onboarding`. Verificar cuál acepta el ambiente.
 
 ## 2.2 Request
 
@@ -92,9 +93,7 @@ Content-Type: application/json
 | Método | Qué se envía en `token1` | Requiere |
 |---|---|---|
 | `"3"` | Imagen **abierta en base64** del frente de la cédula, donde está el rostro | — |
-| `"5"` | Token generado por el **recorte de la foto del documento** (`TokenFaceImage`) | Widget SelphID Mobile |
-
-Ambos métodos usan `bestImageToken` como segunda imagen. La app decide cuál usar según cómo capture la cédula.
+| `"5"` | Token del **recorte de la foto del documento** (`TokenFaceImage`) | Widget SelphID Mobile |
 
 ```json
 {
@@ -113,7 +112,7 @@ Ambos métodos usan `bestImageToken` como segunda imagen. La app decide cuál us
 | Campo | Tipo | Descripción |
 |---|---|---|
 | `serviceTransactionId` | string | Identificador de la transacción en la API |
-| `serviceResultCode` | integer | Resultado **de la ejecución del servicio** (no del veredicto biométrico) |
+| `serviceResultCode` | integer | Resultado **de la ejecución del servicio**, no del veredicto biométrico |
 | `serviceResultLog` | string | Detalle de la ejecución |
 | `serviceTime` | string | Tiempo de procesamiento en milisegundos |
 | `facialAuthenticationResult` | integer | Resultado de la **coincidencia facial** |
@@ -140,7 +139,7 @@ Ambos métodos usan `bestImageToken` como segunda imagen. La app decide cuál us
 > `evaluatePassiveLiveness` usan `serviceFacialAuthenticationResult` y `serviceLivenessResult`; Identity V2 usa
 > `facialAuthenticationResult` y `passiveLivenessResult`, sin prefijo. No copiar modelos entre endpoints.
 
-## 2.4 Errores HTTP
+## 2.4 Errores HTTP de Facephi
 
 | Código | Significado |
 |---|---|
@@ -201,178 +200,334 @@ Ambos métodos usan `bestImageToken` como segunda imagen. La app decide cuál us
 ### Por qué la distinción importa
 
 Un cliente con mala luz (`4`, `16`, `18`) **no es un fraude**: debe poder recapturar. Un `1` en coincidencia
-facial o un `17` en prueba de vida sí son rechazos que deben cortar el flujo de activación del Soft Token.
-Devolver lo mismo en ambos casos convierte un problema de iluminación en un cliente bloqueado.
+facial o un `17` en prueba de vida sí son rechazos que deben cortar la activación del Soft Token. Devolver lo
+mismo en ambos casos convierte un problema de iluminación en un cliente bloqueado.
 
 ---
 
-# 4. Lo que ya está implementado
+# 4. Estado actual de la implementación
 
-Verificado contra la documentación oficial, campo por campo. **La integración es correcta.**
+Verificado contra la documentación oficial, campo por campo. **La integración con Facephi es correcta**: la
+URL, los campos del request, los valores de `method` y los nueve campos de respuesta coinciden.
 
-| Elemento | Doc | Implementación |
-|---|---|---|
-| URL | `POST /onboarding/v2/identity` | ✔ |
-| Campos obligatorios del request | `token1`, `bestImageToken`, `method` | ✔ |
-| `tracking` opcional | ✔ | ✔ y se **omite** del payload cuando no viene |
-| Valores de `method` | `"3"` o `"5"` | ✔ validados |
-| `operationId` como UUID | ✔ | ✔ validado |
-| Campos de respuesta | 9 campos | ✔ los 9 mapeados |
-| Logs sin datos biométricos | — | ✔ sólo método, códigos y transactionId |
-| Ruta genérica, sin "softtoken" | requisito del equipo | ✔ `/facephi/validate` |
+## 4.1 Mapa de archivos
 
-## 4.1 Estructura
+| Archivo | Qué hace hoy |
+|---|---|
+| `src/micro-person-api/Endpoints/FacePhi.cs` | Expone `POST /facephi/validate`, delega al comando y devuelve `Results.Ok` |
+| `src/micro-person-api/Application/Facephi/Commands/ValidateIdentityV2Cmd.cs` | Comando, validador FluentValidation y handler MediatR |
+| `src/micro-person-api/Common/Interfaces/Biometric/IFacePhiService.cs` | Contrato del cliente de Facephi |
+| `src/micro-person-api/Services/Biometric/FacePhiService.cs` | `EvaluatePassiveLivenessToken`: arma el payload y llama a `/onboarding/v2/identity` |
+| `src/micro-person-api/Common/Models/Biometric/PassiveLivenessResults.cs` | `PassiveLivenessResult`: los 9 campos de la respuesta |
+| `src/micro-person-api/Common/Enums/FacePhi/` | `FacephiLivenessResult` |
+| `tests/UnitTests/Application/SoftTokenFacephi/ValidateIdentityV2CmdTests.cs` | Tests del validador y del handler |
 
-```
-src/micro-person-api/
-├── Endpoints/FacePhi.cs                                  → POST /facephi/validate
-├── Application/Facephi/Commands/ValidateIdentityV2Cmd.cs → Cmd + Validator + Handler
-├── Common/Models/Biometric/PassiveLivenessResults.cs     → PassiveLivenessResult
-├── Common/Interfaces/Biometric/IFacePhiService.cs
-└── Services/Biometric/FacePhiService.cs                  → EvaluatePassiveLivenessToken
-tests/UnitTests/Application/SoftTokenFacephi/
-└── ValidateIdentityV2CmdTests.cs                         → validador + handler
-```
+## 4.2 Lo que está bien y no hay que tocar
 
-## 4.2 Comando y validaciones
+- La ruta `/facephi/validate` es genérica, sin semántica de Soft Token.
+- El payload omite el objeto `tracking` completo cuando no hay datos, en vez de mandarlo con nulos.
+- Los `LogInformation` registran método, códigos y `transactionId`, **nunca** los tokens biométricos.
+- El validador exige `token1`, `bestImageToken` y `method`, y restringe `method` a `"3"` o `"5"`.
+- Los tests verifican el mapeo campo por campo con `Verify`.
 
-```csharp
-public class ValidateIdentityV2Cmd : IRequest<PassiveLivenessResult>
-{
-    public string Token1 { get; set; } = string.Empty;
-    public string BestImageToken { get; set; } = string.Empty;
-    public string Method { get; set; } = string.Empty;
-    public FacephiTrackingExtraData? Tracking { get; set; }
-}
+## 4.3 El problema de fondo
 
-public class ValidateIdentityV2CmdValidator : AbstractValidator<ValidateIdentityV2Cmd>
-{
-    public ValidateIdentityV2CmdValidator()
-    {
-        RuleFor(x => x.Token1).NotEmpty().WithMessage("token1 is required.");
-        RuleFor(x => x.BestImageToken).NotEmpty().WithMessage("bestImageToken is required.");
-        RuleFor(x => x.Method)
-            .NotEmpty().WithMessage("method is required.")
-            .Must(method => method is "3" or "5").WithMessage("method must be 3 or 5.");
-
-        When(x => x.Tracking is not null, () =>
-        {
-            RuleFor(x => x.Tracking!.OperationId)
-                .Must(operationId => string.IsNullOrWhiteSpace(operationId)
-                                     || Guid.TryParse(operationId, out _))
-                .WithMessage("tracking.operationId must be a valid UUID.");
-        });
-    }
-}
-```
-
-## 4.3 Construcción del payload
-
-El servicio omite el objeto `tracking` completo cuando no hay datos, en lugar de enviarlo con nulos:
-
-```csharp
-object payload =
-    string.IsNullOrWhiteSpace(request.TrackingToken) &&
-    string.IsNullOrWhiteSpace(request.OperationId)
-    ? new
-      {
-          token1 = request.Token1,
-          bestImageToken = request.BestImageToken,
-          method = request.Method
-      }
-    : new
-      {
-          token1 = request.Token1,
-          bestImageToken = request.BestImageToken,
-          method = request.Method,
-          tracking = new
-          {
-              extraData = request.TrackingToken,
-              operationId = request.OperationId
-          }
-      };
-```
+El handler devuelve el `PassiveLivenessResult` tal cual y el endpoint responde `Results.Ok(result)` **siempre**.
+Un rechazo biométrico —rostro que no coincide, ausencia de prueba de vida— llega al consumidor como HTTP 200.
+APP-5223 no tiene forma de saber si debe activar el token o no. Eso es lo que resuelve la sección 5.
 
 ---
 
-# 5. Lo que falta: regla de decisión y mapeo a HTTP
+# 5. Guía de cambios, archivo por archivo
 
-**Este es el punto más importante que queda abierto.** Hoy el handler devuelve el resultado tal cual y el
-endpoint responde `Results.Ok(result)` siempre: un rechazo biométrico llega al consumidor como HTTP 200.
+## 5.0 Resumen
 
-## 5.1 La regla
+| # | Archivo | Acción | Prioridad |
+|---|---|---|---|
+| 1 | `Common/Enums/FacePhi/ValidationOutcome.cs` | **Nuevo** | Alta |
+| 2 | `Common/Models/Biometric/ValidateIdentityV2Response.cs` | **Nuevo** | Alta |
+| 3 | `Common/Exceptions/FacephiIntegrationException.cs` | **Nuevo** (si no existe equivalente) | Alta |
+| 4 | `Application/Facephi/Commands/ValidateIdentityV2Cmd.cs` | Modificar | Alta |
+| 5 | `Endpoints/FacePhi.cs` | Modificar | Alta |
+| 6 | `Services/Biometric/FacePhiService.cs` | Modificar | Alta |
+| 7 | La clase que implementa `IExceptionHandler` | Modificar | Alta |
+| 8 | `Common/Models/Biometric/PassiveLivenessResults.cs` | Modificar | Media |
+| 9 | `tests/UnitTests/Application/SoftTokenFacephi/` | Renombrar + añadir tests | Media |
+
+Todas las rutas son relativas a `src/micro-person-api/` salvo las de `tests/`.
+
+---
+
+## 5.1 Nuevo · `Common/Enums/FacePhi/ValidationOutcome.cs`
+
+**Por qué:** hoy no existe ningún tipo que represente el veredicto. Sin él, la decisión queda repartida entre el
+handler y el endpoint.
+
+**Dónde:** misma carpeta donde ya vive `FacephiLivenessResult` — el `using
+onboarding_micro_person.Common.Enums.FacePhi;` de `PassiveLivenessResults.cs` confirma la ruta.
+
+**Archivo completo:**
 
 ```csharp
+namespace onboarding_micro_person.Common.Enums.FacePhi;
+
+/// <summary>
+/// Veredicto de la validación biométrica de Identity Validation V2.
+/// </summary>
 public enum ValidationOutcome
 {
-    Approved,   // pasa: continuar con la activación del Soft Token
-    Rejected,   // no es la misma persona, o no hay prueba de vida
-    Retry,      // la captura no sirvió: pedir al cliente que repita
-    Error       // falló Facephi o nuestra integración
-}
+    /// <summary>Rostro POSITIVE y prueba de vida Live. Continuar con la activación.</summary>
+    Approved,
 
-private static ValidationOutcome Evaluate(PassiveLivenessResult r)
-{
-    // serviceResultCode == 0 sólo indica que el módulo se ejecutó.
-    if (r.ServiceResultCode != 0)
-        return ValidationOutcome.Error;
+    /// <summary>El rostro no coincide o no se detectó vida. Cortar el flujo.</summary>
+    Rejected,
 
-    var liveness = (int)r.passiveLivenessResult;
+    /// <summary>La captura no permitió evaluar. Pedir al cliente que repita.</summary>
+    Retry,
 
-    // Errores técnicos del motor: no es culpa de la captura del cliente.
-    if (liveness is 10 or 15)
-        return ValidationOutcome.Error;
-
-    // Rechazos reales: no coincide el rostro, o no se detectó vida.
-    if (r.facialAuthenticationResult == 1 || liveness is 17 or 1)
-        return ValidationOutcome.Rejected;
-
-    // Lista blanca: sólo se aprueba con POSITIVE + Live explícitos.
-    if (r.facialAuthenticationResult == 3 && liveness == 3)
-        return ValidationOutcome.Approved;
-
-    // Todo lo demás: la captura no permitió evaluar.
-    return ValidationOutcome.Retry;
+    /// <summary>Falló Facephi o nuestra integración.</summary>
+    Error
 }
 ```
 
-> **Lista blanca, nunca lista negra.** No usar `liveness != 17` para decidir que hay vida: la documentación de
-> `evaluatePassiveLiveness` muestra un rechazo NoLive que devuelve `0`, no `17`. Sólo el `3` aprueba.
+---
 
-## 5.2 Mapeo a HTTP
+## 5.2 Nuevo · `Common/Models/Biometric/ValidateIdentityV2Response.cs`
 
-| Outcome | HTTP | Qué hace el consumidor (APP-5223) |
-|---|---|---|
-| `Approved` | `200` | Continúa con la activación del Soft Token |
-| `Rejected` | `422` | Corta el flujo. No reintentar la captura |
-| `Retry` | `422` con `outcome: RETRY` | Pide al cliente repetir la captura |
-| `Error` | `502` | Falla técnica. Reintentable a nivel de servicio |
-| Facephi `504` | `504` | Timeout |
-| Facephi `400`/`401`/`403` | `502` + log `Error` | El consumidor no puede corregirlo: es configuración nuestra |
+**Por qué:** el consumidor necesita el veredicto explícito. Si devolvemos el `PassiveLivenessResult` crudo, cada
+consumidor tendría que reimplementar las tablas de la sección 3 — y tarde o temprano una de esas
+implementaciones se equivocará.
 
-## 5.3 Respuesta sugerida del endpoint
+**Dónde:** junto a `PassiveLivenessResults.cs`, en `Common/Models/Biometric/`.
 
-Envolver el resultado sin perder los campos crudos, para que el consumidor no tenga que reimplementar la tabla:
+**Archivo completo:**
 
 ```csharp
+using onboarding_micro_person.Common.Enums.FacePhi;
+
+namespace onboarding_micro_person.Common.Models.Biometric;
+
+/// <summary>
+/// Respuesta de POST /facephi/validate. Expone el veredicto ya interpretado
+/// y los códigos crudos de Facephi para trazabilidad y soporte.
+/// </summary>
 public class ValidateIdentityV2Response
 {
-    /// <summary>APPROVED | REJECTED | RETRY | ERROR</summary>
-    public string Outcome { get; set; } = string.Empty;
+    /// <summary>Approved | Rejected | Retry | Error</summary>
+    public ValidationOutcome Outcome { get; set; }
 
-    public bool Approved { get; set; }
+    /// <summary>Atajo para el consumidor: true sólo cuando Outcome es Approved.</summary>
+    public bool Approved => Outcome == ValidationOutcome.Approved;
 
-    /// <summary>Códigos de Facephi, para trazabilidad y soporte.</summary>
+    /// <summary>Código de coincidencia facial devuelto por Facephi. Ver tabla 3.2.</summary>
     public int FacialAuthenticationResult { get; set; }
+
+    /// <summary>Código de prueba de vida devuelto por Facephi. Ver tabla 3.3.</summary>
     public int PassiveLivenessResult { get; set; }
+
+    /// <summary>Similitud facial. 1.0 = 100 %.</summary>
     public double FacialAuthenticationSimilarity { get; set; }
+
+    /// <summary>Identificador de la transacción en Facephi. Para soporte.</summary>
     public string ServiceTransactionId { get; set; } = string.Empty;
 }
 ```
 
-Y en el endpoint:
+> Serializa el enum como texto (`"Approved"`, no `0`) para que el JSON sea legible. Si el micro no tiene
+> configurado `JsonStringEnumConverter` de forma global, añade `[JsonConverter(typeof(JsonStringEnumConverter))]`
+> sobre la propiedad `Outcome`.
+
+---
+
+## 5.3 Nuevo · `Common/Exceptions/FacephiIntegrationException.cs`
+
+**Por qué:** hoy, si Facephi falla, el `catch` de `FacePhiService` no tiene a dónde escalar el problema. Sin una
+excepción propia no hay forma de distinguir "Facephi se cayó" de "el cliente fue rechazado".
+
+**Dónde:** primero busca si el micro ya tiene una carpeta de excepciones:
+
+```bash
+grep -rn "class .*Exception" --include=*.cs src/ | head
+```
+
+Si existe (por ejemplo `Common/Exceptions/`), añade el archivo ahí. Si no, créala.
+
+**Archivo completo:**
 
 ```csharp
+namespace onboarding_micro_person.Common.Exceptions;
+
+/// <summary>
+/// Fallo comunicándose con Facephi: error HTTP, timeout o respuesta ilegible.
+/// NO se usa cuando Facephi responde correctamente rechazando al cliente:
+/// eso es un resultado de negocio, no una excepción.
+/// </summary>
+public class FacephiIntegrationException : Exception
+{
+    /// <summary>Código HTTP devuelto por Facephi, si lo hubo.</summary>
+    public int? UpstreamStatusCode { get; }
+
+    public FacephiIntegrationException(
+        string message, int? upstreamStatusCode = null, Exception? innerException = null)
+        : base(message, innerException)
+        => UpstreamStatusCode = upstreamStatusCode;
+}
+```
+
+---
+
+## 5.4 Modificar · `Application/Facephi/Commands/ValidateIdentityV2Cmd.cs`
+
+Tres cambios en este archivo. El comando y el validador **no se tocan**.
+
+### Cambio A — el tipo de retorno del comando
+
+**Línea a cambiar:** la declaración de la clase `ValidateIdentityV2Cmd`.
+
+```csharp
+// ANTES
+public class ValidateIdentityV2Cmd : IRequest<PassiveLivenessResult>
+
+// DESPUÉS
+public class ValidateIdentityV2Cmd : IRequest<ValidateIdentityV2Response>
+```
+
+### Cambio B — la firma del handler
+
+**Líneas a cambiar:** la declaración de `ValidateIdentityV2CmdHandler` y la de `Handle`.
+
+```csharp
+// ANTES
+public class ValidateIdentityV2CmdHandler
+    : IRequestHandler<ValidateIdentityV2Cmd, PassiveLivenessResult>
+{
+    public async Task<PassiveLivenessResult> Handle(
+        ValidateIdentityV2Cmd request, CancellationToken cancellationToken)
+
+// DESPUÉS
+public class ValidateIdentityV2CmdHandler
+    : IRequestHandler<ValidateIdentityV2Cmd, ValidateIdentityV2Response>
+{
+    public async Task<ValidateIdentityV2Response> Handle(
+        ValidateIdentityV2Cmd request, CancellationToken cancellationToken)
+```
+
+### Cambio C — evaluar el resultado antes de devolverlo
+
+**Dónde:** al final del método `Handle`, **después** del segundo `_logger.LogInformation` (el que registra
+`ServiceResultCode`, `FacialResult`, `Similarity`, `LivenessResult` y `TransactionId`). Ahí hoy se devuelve
+`result` directamente; eso es lo que se reemplaza.
+
+```csharp
+        // ... el LogInformation de "Identity Validation V2 completed" se mantiene igual ...
+
+        var outcome = Evaluate(result);
+
+        _logger.LogInformation(
+            "Identity Validation V2 outcome={Outcome}. TransactionId={TransactionId}",
+            outcome, result.ServiceTransactionId);
+
+        return new ValidateIdentityV2Response
+        {
+            Outcome = outcome,
+            FacialAuthenticationResult = result.facialAuthenticationResult,
+            PassiveLivenessResult = (int)result.passiveLivenessResult,
+            FacialAuthenticationSimilarity = result.facialAuthenticationSimilarity,
+            ServiceTransactionId = result.ServiceTransactionId
+        };
+    }
+
+    /// <summary>
+    /// Traduce la respuesta de Facephi a un veredicto. Ver secciones 3.2 y 3.3
+    /// del documento de APP-5258.
+    /// </summary>
+    private static ValidationOutcome Evaluate(PassiveLivenessResult r)
+    {
+        // serviceResultCode == 0 sólo indica que el módulo se ejecutó,
+        // NO que la persona haya sido aprobada.
+        if (r.ServiceResultCode != 0)
+            return ValidationOutcome.Error;
+
+        var liveness = (int)r.passiveLivenessResult;
+
+        // Fallos del motor de Facephi: no es culpa de la captura del cliente.
+        // 10 = NoneBecauseInternalError, 15 = NoneBecauseLicenseError
+        if (liveness is 10 or 15)
+            return ValidationOutcome.Error;
+
+        // Rechazos reales: el rostro no coincide (1 = NEGATIVE),
+        // o no se detectó vida (17 = NoLive, 1 = Spoof deprecado).
+        if (r.facialAuthenticationResult == 1 || liveness is 17 or 1)
+            return ValidationOutcome.Rejected;
+
+        // Lista blanca: sólo se aprueba con POSITIVE (3) y Live (3) explícitos.
+        if (r.facialAuthenticationResult == 3 && liveness == 3)
+            return ValidationOutcome.Approved;
+
+        // Todo lo demás: la captura no permitió evaluar. El cliente repite.
+        return ValidationOutcome.Retry;
+    }
+```
+
+**Usings a añadir** al inicio del archivo, si no están:
+
+```csharp
+using onboarding_micro_person.Common.Enums.FacePhi;
+```
+
+> **Lista blanca, nunca lista negra.** No uses `liveness != 17` para concluir que hay vida: la documentación de
+> `evaluatePassiveLiveness` muestra un rechazo NoLive que devuelve `0`, no `17`. Sólo el `3` aprueba.
+
+> **Verifica el enum `FacephiLivenessResult`** en `Common/Enums/FacePhi/`: el `(int)` de arriba asume que sus
+> miembros tienen asignados los valores de la tabla 3.3 (`Live = 3`, `NoLive = 17`). Si el enum se declaró sin
+> valores explícitos, C# numera desde 0 en orden de declaración y el cast daría números equivocados. Es una
+> verificación de dos minutos que evita un fallo silencioso.
+
+---
+
+## 5.5 Modificar · `Endpoints/FacePhi.cs`
+
+Dos cambios: el tipo declarado en `Produces` y el mapeo del veredicto a código HTTP.
+
+### Cambio A — `Produces`
+
+**Dónde:** dentro de `Map(WebApplication app)`, en la cadena del `group.MapPost("/validate", ...)`.
+
+```csharp
+// ANTES
+.Produces<PassiveLivenessResult>(StatusCodes.Status200OK)
+.Produces(StatusCodes.Status400BadRequest)
+.Produces(StatusCodes.Status401Unauthorized)
+.Produces(StatusCodes.Status403Forbidden)
+.Produces(StatusCodes.Status502BadGateway)
+.Produces(StatusCodes.Status504GatewayTimeout)
+
+// DESPUÉS
+.Produces<ValidateIdentityV2Response>(StatusCodes.Status200OK)
+.Produces<ValidateIdentityV2Response>(StatusCodes.Status422UnprocessableEntity)
+.Produces(StatusCodes.Status400BadRequest)
+.Produces(StatusCodes.Status401Unauthorized)
+.Produces(StatusCodes.Status403Forbidden)
+.Produces(StatusCodes.Status502BadGateway)
+.Produces(StatusCodes.Status504GatewayTimeout)
+```
+
+### Cambio B — el método `ValidateIdentityV2`
+
+**Dónde:** el método que hoy hace `return Results.Ok(result);`, al final del archivo.
+
+```csharp
+// ANTES
+public async Task<IResult> ValidateIdentityV2(
+    ValidateIdentityV2Cmd request,
+    ISender sender,
+    CancellationToken cancellationToken)
+{
+    var result = await sender.Send(request, cancellationToken);
+    return Results.Ok(result);
+}
+
+// DESPUÉS
 public async Task<IResult> ValidateIdentityV2(
     ValidateIdentityV2Cmd request,
     ISender sender,
@@ -380,42 +535,211 @@ public async Task<IResult> ValidateIdentityV2(
 {
     var result = await sender.Send(request, cancellationToken);
 
+    // Rejected y Retry NO son errores del servicio: son resultados de negocio.
+    // Por eso 422 con cuerpo, y no 400 ni 500.
     return result.Outcome switch
     {
-        "APPROVED" => Results.Ok(result),
-        "ERROR"    => Results.Json(result, statusCode: StatusCodes.Status502BadGateway),
-        _          => Results.Json(result, statusCode: StatusCodes.Status422UnprocessableEntity)
+        ValidationOutcome.Approved => Results.Ok(result),
+        ValidationOutcome.Error    => Results.Json(
+            result, statusCode: StatusCodes.Status502BadGateway),
+        _                          => Results.Json(
+            result, statusCode: StatusCodes.Status422UnprocessableEntity)
     };
 }
 ```
 
-> Alternativa mínima si no se quiere cambiar la forma del body: dejar `PassiveLivenessResult` como respuesta y
-> cambiar **sólo el código HTTP**. Es menos claro para el consumidor, pero no rompe nada de lo ya construido.
-> Lo que **no** es aceptable es seguir devolviendo `200` para todo.
+**Usings a añadir:**
+
+```csharp
+using onboarding_micro_person.Common.Enums.FacePhi;
+using onboarding_micro_person.Common.Models.Biometric;
+```
+
+### Contrato resultante
+
+| Outcome | HTTP | Qué hace APP-5223 |
+|---|---|---|
+| `Approved` | `200` | Continúa con la activación del Soft Token |
+| `Rejected` | `422` | Corta el flujo. No pedir recaptura |
+| `Retry` | `422` | Pide al cliente repetir la captura |
+| `Error` | `502` | Falla técnica, reintentable a nivel de servicio |
+
+> El consumidor distingue `Rejected` de `Retry` leyendo el campo `outcome` del cuerpo. Ambos son 422 porque en
+> los dos casos la petición era válida pero no se pudo completar la operación.
+
+> **Alternativa mínima**, si cambiar la forma del cuerpo obliga a coordinar con quien ya está consumiendo:
+> mantener `PassiveLivenessResult` como respuesta y cambiar **sólo el código HTTP**. Es menos claro, pero
+> resuelve el problema de fondo. Lo que **no** es aceptable es seguir devolviendo `200` para todo.
 
 ---
 
-# 6. Lo que falta: headers, binding y limpieza
+## 5.6 Modificar · `Services/Biometric/FacePhiService.cs`
 
-## 6.1 Headers obligatorios
+Cuatro cambios dentro del método `EvaluatePassiveLivenessToken`. Este archivo es largo; los anclajes indican el
+punto exacto.
 
-Confirmar que `FacePhiService` envía ambos en el `HttpRequestMessage`:
+### Cambio A — headers obligatorios
+
+**Dónde:** justo después de construir el `HttpRequestMessage`, antes de enviarlo. En el código revisado eso es:
 
 ```csharp
-httpRequest.Headers.Add("x-api-key", _appSettings.FACEPHI_IDENTITY_API_KEY);
-httpRequest.Headers.Add("family", "OnBoarding");   // requerido al enviar tracking
+var httpRequest = new HttpRequestMessage(HttpMethod.Post, url)
+{
+    Content = new StringContent(json, Encoding.UTF8, "application/json")
+};
 ```
 
-Como el payload sí incluye `tracking`, el header `family` aplica. Probar la capitalización que acepta el
-ambiente: la doc en español dice `OnBoarding` y la inglesa `Onboarding`.
-
-## 6.2 Binding de la respuesta
-
-`PassiveLivenessResult` mezcla convenciones: cinco campos en camelCase y cuatro en PascalCase. Los nombres son
-**correctos** para Identity V2, pero los cuatro en PascalCase sólo bindean si la deserialización es
-*case-insensitive*. Hacerlo explícito elimina la dependencia de esa configuración:
+**Añadir inmediatamente debajo:**
 
 ```csharp
+// x-api-key es obligatorio. family es requerido al enviar el objeto tracking,
+// y este payload lo incluye cuando el SDK lo entrega.
+httpRequest.Headers.Add("x-api-key", _appSettings.FACEPHI_IDENTITY_API_KEY);
+httpRequest.Headers.Add("family", "OnBoarding");
+```
+
+**Antes de dar esto por hecho**, verifica que la llave exista en configuración:
+
+```bash
+grep -rn "FACEPHI_IDENTITY" --include=*.cs --include=*.json src/
+```
+
+Si el micro ya llamaba a otros endpoints de Identity API, la llave probablemente ya está y sólo hay que usarla.
+Si no existe, añádela junto a `FACEPHI_IDENTITY_API_BASE_URL` en la clase de settings y en la configuración —
+**el valor no se versiona**: va por variable de entorno o vault.
+
+### Cambio B — deserialización explícita
+
+**Dónde:** donde el método convierte el cuerpo de la respuesta en `PassiveLivenessResult`.
+
+```csharp
+// Si el JSON llega en camelCase y el modelo tiene propiedades en PascalCase,
+// sin esta opción los campos quedan en 0 sin lanzar ningún error.
+var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+var result = JsonSerializer.Deserialize<PassiveLivenessResult>(body, options);
+
+if (result is null)
+    throw new FacephiIntegrationException(
+        "Facephi devolvió un cuerpo vacío o no interpretable.");
+```
+
+El cambio 5.8 hace esto redundante al poner `[JsonPropertyName]` explícito; aplicar ambos no hace daño y protege
+si alguien añade un campo nuevo sin atributo.
+
+### Cambio C — no tragarse los errores HTTP
+
+**Dónde:** después de enviar la petición, antes de leer el cuerpo.
+
+```csharp
+if (!response.IsSuccessStatusCode)
+{
+    // No se loguea el cuerpo: puede contener datos biométricos.
+    _logger.LogError(
+        "Facephi respondió {StatusCode} en Identity Validation V2.",
+        (int)response.StatusCode);
+
+    throw new FacephiIntegrationException(
+        $"Facephi respondió con código {(int)response.StatusCode}.",
+        (int)response.StatusCode);
+}
+```
+
+### Cambio D — el `catch`
+
+**Dónde:** el `catch` que cierra el `try` de este método.
+
+**El problema actual:** si el `catch` registra el error y devuelve un `PassiveLivenessResult` vacío, ese objeto
+llega al handler con `ServiceResultCode = 0` y la regla de la sección 5.4 lo interpretaría como ejecución
+correcta con códigos en cero → `Retry`. Un Facephi caído se reportaría como "repite la captura".
+
+```csharp
+catch (FacephiIntegrationException)
+{
+    throw;   // ya tiene el contexto correcto
+}
+catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+{
+    throw new FacephiIntegrationException(
+        "Timeout invocando Identity Validation V2.", 504, ex);
+}
+catch (HttpRequestException ex)
+{
+    throw new FacephiIntegrationException(
+        "Error de red invocando Identity Validation V2.", 502, ex);
+}
+```
+
+> **Ojo con el `catch` del `FinishTrackingAsync`**, unas líneas más arriba en el mismo archivo: ese sí debe
+> seguir tragándose la excepción con un `LogWarning`, porque el tracking es accesorio y no debe tumbar la
+> validación. Son dos criterios distintos y conviven bien.
+
+---
+
+## 5.7 Modificar · la clase que implementa `IExceptionHandler`
+
+**Por qué:** sin esto, la `FacephiIntegrationException` que ahora lanza el servicio sale como HTTP 500 genérico
+en vez de 502/504.
+
+**Dónde encontrarla:** el proyecto usa la plantilla Clean Architecture (`EndpointGroupBase`, `MapGroup`,
+`ISender`), donde el manejador suele llamarse `CustomExceptionHandler` y vivir junto a `EndpointGroupBase` — es
+decir, probablemente en `Common/Infrastructure/`, por el `using onboarding_micro_person.Common.Infrastructure;`
+del archivo de endpoints. Confírmalo:
+
+```bash
+grep -rn "IExceptionHandler\|ProblemDetails" --include=*.cs src/
+```
+
+**Qué añadir:** una entrada más en el diccionario o `switch` de mapeo de excepciones.
+
+```csharp
+{ typeof(FacephiIntegrationException), HandleFacephiIntegrationException },
+```
+
+```csharp
+private async Task HandleFacephiIntegrationException(
+    HttpContext httpContext, Exception ex)
+{
+    var exception = (FacephiIntegrationException)ex;
+
+    // 504 sólo si Facephi realmente dio timeout; el resto es 502.
+    httpContext.Response.StatusCode = exception.UpstreamStatusCode == 504
+        ? StatusCodes.Status504GatewayTimeout
+        : StatusCodes.Status502BadGateway;
+
+    await httpContext.Response.WriteAsJsonAsync(new ProblemDetails
+    {
+        Status = httpContext.Response.StatusCode,
+        Title = "Error de integración con Facephi",
+        // Sin detalles internos hacia el cliente.
+        Detail = "No fue posible completar la validación biométrica."
+    });
+}
+```
+
+**Verifica también** que el pipeline tenga registrado el `ValidationBehaviour` de FluentValidation: es lo que
+convierte un `method = "4"` en un `400` con los mensajes del validador. Si el `400` no sale, es que ese
+comportamiento no está en el pipeline de MediatR.
+
+---
+
+## 5.8 Modificar · `Common/Models/Biometric/PassiveLivenessResults.cs`
+
+**Por qué:** los nombres de los nueve campos son **correctos** para Identity V2, pero cuatro están en PascalCase
+y sólo bindean si la deserialización es *case-insensitive*. Hacerlo explícito elimina esa dependencia.
+
+**Archivo completo resultante:**
+
+```csharp
+using System.Text.Json.Serialization;
+using onboarding_micro_person.Common.Enums.FacePhi;
+
+namespace onboarding_micro_person.Common.Models.Biometric;
+
+/// <summary>
+/// Respuesta de POST /onboarding/v2/identity (Identity Validation V2).
+/// Los nombres JSON son los de ESE endpoint: otros endpoints de Facephi
+/// usan el prefijo "service" (serviceLivenessResult, etc.).
+/// </summary>
 public class PassiveLivenessResult
 {
     [JsonPropertyName("serviceTransactionId")]
@@ -447,7 +771,98 @@ public class PassiveLivenessResult
 }
 ```
 
-Y un test que deserialice el JSON de ejemplo de la documentación, no un objeto construido en memoria:
+### Riesgo heredado a revisar
+
+Este modelo se usa también en el flujo de onboarding que llama a `/services/evaluatePassiveLiveness`. **Ese
+endpoint devuelve `serviceLivenessResult`, no `passiveLivenessResult`.** Si ambos flujos deserializan en la
+misma clase, el resultado de vida del flujo viejo estaría cayendo en `0` (None) de forma silenciosa — y con los
+`[JsonPropertyName]` de arriba el problema se vuelve permanente en vez de accidental.
+
+```bash
+grep -rn "PassiveLivenessResult" --include=*.cs src/
+```
+
+Si aparece en más de un flujo, separa en dos modelos: `IdentityValidationV2Result` para este endpoint y
+`PassiveLivenessResult` para el otro.
+
+---
+
+## 5.9 Modificar · tests
+
+### Cambio A — renombrar la carpeta
+
+```
+tests/UnitTests/Application/SoftTokenFacephi/  →  tests/UnitTests/Application/Facephi/
+```
+
+El namespace de dentro ya dice `onboarding_micro_person.Tests.UnitTests.Application.Facephi`, así que sólo hay
+que mover la carpeta. Es exactamente el nombre que el equipo pidió no usar.
+
+### Cambio B — actualizar el test del handler
+
+El test `Handler_MapsRequest_AndReturnsResult` **dejará de compilar** al cambiar el tipo de retorno: hoy hace
+`Assert.That(result.ServiceResultCode, Is.EqualTo(0))` sobre lo que ahora es un `ValidateIdentityV2Response`.
+
+```csharp
+// ANTES
+Assert.That(result.ServiceResultCode, Is.EqualTo(0));
+Assert.That(result.facialAuthenticationResult, Is.EqualTo(3));
+Assert.That(result.passiveLivenessResult, Is.EqualTo(FacephiLivenessResult.Live));
+
+// DESPUÉS
+Assert.That(result.Outcome, Is.EqualTo(ValidationOutcome.Approved));
+Assert.That(result.Approved, Is.True);
+Assert.That(result.FacialAuthenticationResult, Is.EqualTo(3));
+Assert.That(result.PassiveLivenessResult, Is.EqualTo(3));
+```
+
+El `_facePhiMock.Verify(...)` que comprueba el mapeo del request **no cambia**: sigue siendo válido y es la
+parte más valiosa de ese test.
+
+### Cambio C — tests de la regla de decisión
+
+El veredicto es la lógica nueva y hoy no tiene cobertura. Un `TestCase` por fila cubre toda la tabla:
+
+```csharp
+[TestCase(3,  3,  ValidationOutcome.Approved)]   // POSITIVE + Live
+[TestCase(1,  3,  ValidationOutcome.Rejected)]   // NEGATIVE: no es la misma persona
+[TestCase(3,  17, ValidationOutcome.Rejected)]   // NoLive: sin prueba de vida
+[TestCase(3,  0,  ValidationOutcome.Retry)]      // None: no se pudo evaluar
+[TestCase(3,  4,  ValidationOutcome.Retry)]      // mala calidad de imagen
+[TestCase(3,  18, ValidationOutcome.Retry)]      // ojos cerrados
+[TestCase(0,  3,  ValidationOutcome.Retry)]      // no se pudo verificar el rostro
+[TestCase(3,  10, ValidationOutcome.Error)]      // error interno de Facephi
+[TestCase(3,  15, ValidationOutcome.Error)]      // error de licencia
+public async Task Handler_Evalua_El_Veredicto_Segun_Los_Codigos_De_Facephi(
+    int facialResult, int livenessResult, ValidationOutcome esperado)
+{
+    _facePhiMock
+        .Setup(x => x.EvaluatePassiveLivenessToken(
+            It.IsAny<PassiveLivenessRequest>(), It.IsAny<CancellationToken>()))
+        .ReturnsAsync(new PassiveLivenessResult
+        {
+            ServiceResultCode = 0,
+            facialAuthenticationResult = facialResult,
+            passiveLivenessResult = (FacephiLivenessResult)livenessResult
+        });
+
+    var result = await _handler.Handle(
+        new ValidateIdentityV2Cmd
+        {
+            Token1 = "reference-token",
+            BestImageToken = "best-image-token",
+            Method = "3"
+        },
+        CancellationToken.None);
+
+    Assert.That(result.Outcome, Is.EqualTo(esperado));
+}
+```
+
+### Cambio D — test de deserialización
+
+El test actual construye el `PassiveLivenessResult` en memoria, así que nunca ejercita el binding del JSON: si
+los nombres estuvieran mal, no se enteraría.
 
 ```csharp
 [Test]
@@ -473,59 +888,96 @@ public void Deserializa_La_Respuesta_De_Ejemplo_De_Facephi()
     {
         Assert.That(result.ServiceResultCode, Is.EqualTo(0));
         Assert.That(result.ServiceTransactionId, Is.Not.Empty);   // detecta binding roto
+        Assert.That(result.ServiceTime, Is.EqualTo("2235"));
         Assert.That(result.facialAuthenticationResult, Is.EqualTo(3));
         Assert.That((int)result.passiveLivenessResult, Is.EqualTo(3));
     });
 }
 ```
 
-## 6.3 Riesgo heredado: modelo compartido entre dos endpoints
+### Cambio E — tests negativos del validador
 
-`PassiveLivenessResult` se usa también en el flujo de onboarding que llama a `evaluatePassiveLiveness`. Ese
-endpoint devuelve **`serviceLivenessResult`**, no `passiveLivenessResult`. Si ambos flujos deserializan en el
-mismo modelo, el resultado de vida del flujo viejo estaría cayendo en `0` (None) de forma silenciosa.
+```csharp
+[TestCase("4")]
+[TestCase("1")]
+[TestCase("")]
+public void Validator_Rechaza_Methods_No_Soportados(string method)
+{
+    var result = new ValidateIdentityV2CmdValidator().Validate(
+        new ValidateIdentityV2Cmd
+        {
+            Token1 = "t",
+            BestImageToken = "b",
+            Method = method
+        });
 
-Revisarlo. Si se confirma, separar en dos modelos: `IdentityValidationV2Result` y `PassiveLivenessResult`.
+    Assert.That(result.IsValid, Is.False);
+}
 
-## 6.4 Nombres
+[Test]
+public void Validator_Rechaza_OperationId_Que_No_Es_Uuid()
+{
+    var result = new ValidateIdentityV2CmdValidator().Validate(
+        new ValidateIdentityV2Cmd
+        {
+            Token1 = "t",
+            BestImageToken = "b",
+            Method = "3",
+            Tracking = new FacephiTrackingExtraData { OperationId = "no-es-uuid" }
+        });
 
-| Actual | Sugerido | Motivo |
-|---|---|---|
-| `EvaluatePassiveLivenessToken` | `ValidateIdentityV2Async` | Llama a Identity V2, no a `evaluatePassiveLiveness`, que es un endpoint distinto. Además falta el sufijo `Async` que usa el resto del servicio |
-| `PassiveLivenessRequest` | `IdentityValidationV2Request` | Mismo motivo |
-| `tests/.../SoftTokenFacephi/` | `tests/.../Facephi/` | Es justo el nombre que el equipo pidió no usar; el namespace dentro ya dice `Application.Facephi` |
-
-## 6.5 Manejo de errores
-
-Revisar el `try/catch` de `FacePhiService`: si captura la excepción y devuelve un `PassiveLivenessResult` vacío,
-el resultado tendría `ServiceResultCode = 0` y la regla de la sección 5 lo leería como ejecución correcta. El
-catch debe propagar una excepción propia (por ejemplo `FacephiIntegrationException`) que el pipeline traduzca a
-`502` o `504`, nunca devolver un objeto vacío.
+    Assert.That(result.IsValid, Is.False);
+}
+```
 
 ---
 
-# 7. Checklist de cierre
+## 5.10 Renombres pendientes (opcional, baja prioridad)
 
-| # | Tarea | Sección | Prioridad |
-|---|---|---|---|
-| 1 | Implementar la regla de decisión `Approved/Rejected/Retry/Error` | 5.1 | **Alta** |
-| 2 | Mapear el resultado a 200 / 422 / 502 / 504 | 5.2 – 5.3 | **Alta** |
-| 3 | Confirmar `x-api-key` y `family` en el request a Facephi | 6.1 | **Alta** |
-| 4 | Revisar el `catch`: no devolver resultados vacíos | 6.5 | **Alta** |
-| 5 | `[JsonPropertyName]` explícito + test de deserialización | 6.2 | Media |
-| 6 | Verificar el modelo compartido con `evaluatePassiveLiveness` | 6.3 | Media |
-| 7 | Renombrar servicio, request y carpeta de tests | 6.4 | Baja |
-| 8 | Tests negativos: `method` inválido, `operationId` no-UUID, Facephi caído | — | Media |
-| 9 | Corregir el modelo de datos de APP-5258: `token2` no aplica | 1.1 | Baja |
+No afectan al funcionamiento, pero evitan confusión futura. Hazlos con el *rename* del IDE, en un commit
+separado del resto:
 
-## 7.1 Pruebas manuales
+| Actual | Sugerido | Motivo |
+|---|---|---|
+| `IFacePhiService.EvaluatePassiveLivenessToken` | `ValidateIdentityV2Async` | Llama a Identity V2, no a `evaluatePassiveLiveness`, que es otro endpoint. Además el resto del servicio usa el sufijo `Async` |
+| `PassiveLivenessRequest` | `IdentityValidationV2Request` | Mismo motivo |
+| `PassiveLivenessResult` | `IdentityValidationV2Result` | Sólo si se confirma el riesgo de 5.8 |
+
+Tocan `IFacePhiService.cs`, `FacePhiService.cs`, `ValidateIdentityV2Cmd.cs` y los tests.
+
+---
+
+# 6. Orden de aplicación y verificación
+
+Este orden mantiene el proyecto compilando en cada paso.
+
+| Paso | Cambio | El proyecto compila |
+|---|---|---|
+| 1 | 5.1 `ValidationOutcome` | Sí — sólo añade un enum |
+| 2 | 5.2 `ValidateIdentityV2Response` | Sí — sólo añade un modelo |
+| 3 | 5.3 `FacephiIntegrationException` | Sí — sólo añade una excepción |
+| 4 | 5.8 `[JsonPropertyName]` | Sí — no cambia firmas |
+| 5 | 5.4 comando y handler | **No**, hasta completar el paso 6 |
+| 6 | 5.5 endpoint | Sí — se cierra el cambio de tipo |
+| 7 | 5.6 servicio: headers, errores, catch | Sí |
+| 8 | 5.7 manejador de excepciones | Sí |
+| 9 | 5.9 tests | Sí |
+
+Los pasos 5 y 6 van juntos: cambiar el tipo de retorno del comando rompe el endpoint hasta que se actualiza.
+
+## 6.1 Verificación
+
+```bash
+dotnet build
+dotnet test
+```
 
 ```bash
 # Aprobado
 curl -sX POST https://localhost:5001/facephi/validate \
   -H "Content-Type: application/json" \
   -d '{"token1":"<base64-cedula>","bestImageToken":"<token-selfie>","method":"3"}'
-# → 200 { "outcome": "APPROVED", "approved": true, ... }
+# → 200 { "outcome": "Approved", "approved": true, ... }
 
 # Con tracking
 curl -sX POST https://localhost:5001/facephi/validate \
@@ -537,38 +989,57 @@ curl -sX POST https://localhost:5001/facephi/validate \
 curl -sX POST https://localhost:5001/facephi/validate \
   -H "Content-Type: application/json" \
   -d '{"token1":"x","bestImageToken":"y","method":"4"}'
+
+# Sin bestImageToken → 400
+curl -sX POST https://localhost:5001/facephi/validate \
+  -H "Content-Type: application/json" \
+  -d '{"token1":"x","method":"3"}'
 ```
 
-Verificar además que **ningún log** contenga `token1`, `bestImageToken` ni `extraData`.
+Con una URL de Facephi inválida en configuración, el servicio debe responder **502**, no 200 ni 500.
+
+Y por último, la verificación que no puede faltar:
+
+```bash
+grep -ri "<el token que usaste en las pruebas>" logs/
+# No debe devolver ninguna línea: sería una fuga de datos biométricos.
+```
 
 ---
 
-# 8. Preguntas cerradas y abiertas
+# 7. Checklist de cierre
 
-## 8.1 Cerradas
+| # | Tarea | Sección | Archivo | Prioridad |
+|---|---|---|---|---|
+| 1 | Enum `ValidationOutcome` | 5.1 | `Common/Enums/FacePhi/ValidationOutcome.cs` | **Alta** |
+| 2 | Modelo de respuesta | 5.2 | `Common/Models/Biometric/ValidateIdentityV2Response.cs` | **Alta** |
+| 3 | Excepción de integración | 5.3 | `Common/Exceptions/FacephiIntegrationException.cs` | **Alta** |
+| 4 | Regla de decisión en el handler | 5.4 | `Application/Facephi/Commands/ValidateIdentityV2Cmd.cs` | **Alta** |
+| 5 | Mapeo a 200 / 422 / 502 | 5.5 | `Endpoints/FacePhi.cs` | **Alta** |
+| 6 | Headers `x-api-key` y `family` | 5.6 A | `Services/Biometric/FacePhiService.cs` | **Alta** |
+| 7 | Errores HTTP y `catch` sin objetos vacíos | 5.6 C-D | `Services/Biometric/FacePhiService.cs` | **Alta** |
+| 8 | Traducción de la excepción a 502/504 | 5.7 | manejador de `IExceptionHandler` | **Alta** |
+| 9 | Verificar los valores del enum `FacephiLivenessResult` | 5.4 | `Common/Enums/FacePhi/` | **Alta** |
+| 10 | `[JsonPropertyName]` explícito | 5.8 | `Common/Models/Biometric/PassiveLivenessResults.cs` | Media |
+| 11 | Revisar el modelo compartido con `evaluatePassiveLiveness` | 5.8 | — | Media |
+| 12 | Tests del veredicto, deserialización y negativos | 5.9 | `tests/UnitTests/Application/Facephi/` | Media |
+| 13 | Renombrar la carpeta `SoftTokenFacephi` | 5.9 A | `tests/UnitTests/Application/` | Media |
+| 14 | Renombres del servicio y los modelos | 5.10 | varios | Baja |
+| 15 | Corregir el modelo de datos de APP-5258: `token2` no aplica | 1 | Jira | Baja |
 
-| Pregunta | Respuesta |
-|---|---|
-| ¿Endpoints propios de Soft Token? | No. Genéricos de Facephi |
-| ¿Qué endpoint se integra? | `POST /onboarding/v2/identity` |
-| ¿Importa el `requestId`? | No |
-| ¿`token2` (dorso)? | No aplica a Identity V2 |
-| ¿Valores de `method`? | `"3"` imagen abierta, `"5"` TokenFaceImage del widget SelphID |
-| ¿Identity V2 o Authenticate User V2? | Identity V2: el cliente escanea su cédula al activar el token |
-| ¿Persistencia en MongoDB? | No se requiere: la operación es sin estado |
+---
 
-## 8.2 Abiertas
+# 8. Preguntas abiertas
 
 | # | Pregunta | Para quién |
 |---|---|---|
 | 1 | ¿Qué `method` usará la app: `"3"` con imagen abierta o `"5"` con widget SelphID? Define de dónde sale `token1` | Producto / Móvil |
 | 2 | ¿El endpoint `/facephi/validate` lleva autenticación, o queda interno tras el gateway? | Arquitectura / Seguridad |
-| 3 | ¿Cuántos reintentos se permiten ante `RETRY` antes de bloquear la activación? | Producto / Riesgo |
-| 4 | ¿Qué debe hacer APP-5223 ante `REJECTED`: bloquear, alertar a fraude, o ambas? | Producto / Riesgo |
+| 3 | ¿Cuántos reintentos se permiten ante `Retry` antes de bloquear la activación? | Producto / Riesgo |
+| 4 | Ante `Rejected`, ¿APP-5223 bloquea, alerta a fraude, o ambas? | Producto / Riesgo |
 | 5 | Capitalización correcta del header `family`: `OnBoarding` u `Onboarding` | Facephi |
 
 ---
 
 *Documento de la implementación real de APP-5258, contrastado campo por campo contra la documentación oficial*
-*de Facephi Identity API. Los fragmentos de código de las secciones 5 y 6 son propuestas de cambio y no han*
-*sido compilados.*
+*de Facephi Identity API. El código de la sección 5 son cambios propuestos y no ha sido compilado.*
