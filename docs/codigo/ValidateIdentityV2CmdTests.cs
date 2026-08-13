@@ -1,14 +1,17 @@
 // Ruta destino:
 // tests/UnitTests/Application/Facephi/ValidateIdentityV2CmdTests.cs
-// (la carpeta se llamaba SoftTokenFacephi; renómbrala a Facephi)
 //
-// Si NUnit o Moq no resuelven, es porque vienen de un GlobalUsings.cs del
-// proyecto de pruebas. En ese caso no agregues nada; ya están.
+// Si NUnit o Moq no resuelven, vienen de un GlobalUsings.cs del proyecto de pruebas.
 
-using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using onboarding_micro_person.Application.Facephi.Commands;
+using onboarding_micro_person.Common.Configuration;
+using onboarding_micro_person.Common.Entities;
+using onboarding_micro_person.Common.Enums.Biometric;
 using onboarding_micro_person.Common.Enums.FacePhi;
+using onboarding_micro_person.Common.Extensions.FacePhi;
+using onboarding_micro_person.Common.Interfaces;
 using onboarding_micro_person.Common.Interfaces.Biometric;
 using onboarding_micro_person.Common.Models.Biometric;
 
@@ -18,73 +21,160 @@ namespace onboarding_micro_person.Tests.UnitTests.Application.Facephi
     [Category("Facephi")]
     public class ValidateIdentityV2CmdTests
     {
+        private const int FacialPositive = 3;
+        private const int FacialNegative = 1;
+        private const int FacialNone = 0;
+
         private Mock<IFacePhiService> _facePhiMock = default!;
+        private Mock<IFacePhiBiometricRepository> _repositoryMock = default!;
         private Mock<IIdentityValidationEvaluator> _evaluatorMock = default!;
-        private ValidateIdentityV2CmdHandler _handler = default!;
+        private AppSettings _settings = default!;
 
         [SetUp]
         public void Setup()
         {
             _facePhiMock = new Mock<IFacePhiService>();
+            _repositoryMock = new Mock<IFacePhiBiometricRepository>();
             _evaluatorMock = new Mock<IIdentityValidationEvaluator>();
 
-            // Por defecto el umbral se supera. Cada test que necesite
-            // lo contrario lo sobrescribe.
+            _settings = new AppSettings
+            {
+                FACIAL_VALIDATION_CUSTOM_LIVENESS_CHECK = false
+            };
+
+            // Por defecto el umbral se supera; los tests que necesiten lo contrario lo cambian.
             _evaluatorMock
                 .Setup(x => x.MeetsSimilarityThreshold(It.IsAny<double>()))
                 .Returns(true);
 
-            _handler = new ValidateIdentityV2CmdHandler(
-                _facePhiMock.Object,
-                _evaluatorMock.Object,
-                Mock.Of<ILogger<ValidateIdentityV2CmdHandler>>());
+            _repositoryMock
+                .Setup(x => x.UpsertAsync(
+                    It.IsAny<FacePhiBiometricDocument>(), It.IsAny<CancellationToken>()))
+                .Returns(Task.CompletedTask);
+
+            _facePhiMock
+                .Setup(x => x.FinishTrackingAsync(
+                    It.IsAny<bool>(), It.IsAny<string>(),
+                    It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+                .Returns(Task.CompletedTask);
         }
 
-        // ───────────────────────────── Validador ─────────────────────────────
+        private ValidateIdentityV2CmdHandler BuildHandler() => new(
+            _facePhiMock.Object,
+            _repositoryMock.Object,
+            _evaluatorMock.Object,
+            Options.Create(_settings),
+            Mock.Of<ILogger<ValidateIdentityV2CmdHandler>>());
+
+        private static ValidateIdentityV2Cmd BuildCommand(
+            FacephiTrackingExtraData? tracking = null) => new()
+        {
+            IdT24 = "123456789",
+            DocumentType = "CED",
+            Token1 = "reference-token",
+            BestImageToken = "best-image-token",
+            Tracking = tracking
+        };
+
+        private static FacephiTrackingExtraData BuildTracking() => new()
+        {
+            ExtraData = "tracking-extra-data",
+            OperationId = Guid.NewGuid().ToString()
+        };
+
+        private void SetupFacePhi(
+            int serviceResultCode = 0,
+            int facialResult = FacialPositive,
+            FacephiLivenessResult liveness = FacephiLivenessResult.Live,
+            double similarity = 0.9921)
+        {
+            _facePhiMock
+                .Setup(x => x.EvaluatePassiveLivenessToken(
+                    It.IsAny<PassiveLivenessRequest>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new PassiveLivenessResult
+                {
+                    ServiceTransactionId = Guid.NewGuid().ToString(),
+                    ServiceResultCode = serviceResultCode,
+                    facialAuthenticationResult = facialResult,
+                    facialAuthenticationLog = facialResult == FacialPositive ? "Positive" : "Negative",
+                    facialAuthenticationSimilarity = similarity,
+                    passiveLivenessResult = liveness,
+                    passiveLivenessLog = liveness == FacephiLivenessResult.Live ? "Live" : "NoLive"
+                });
+        }
+
+        // ─────────────────────────────── Validador ───────────────────────────────
 
         [Test]
-        public void Validator_Fails_WhenFieldsAreEmpty()
+        public void Validator_Fails_WhenCommandIsEmpty()
         {
-            var validator = new ValidateIdentityV2CmdValidator();
-
-            var result = validator.Validate(new ValidateIdentityV2Cmd());
+            var result = new ValidateIdentityV2CmdValidator().Validate(new ValidateIdentityV2Cmd());
 
             Assert.That(result.IsValid, Is.False);
         }
 
-        [TestCase("3")]
-        [TestCase("5")]
-        public void Validator_AcceptsSupportedMethods(string method)
+        [Test]
+        public void Validator_Succeeds_WithAValidCommand()
         {
-            var validator = new ValidateIdentityV2CmdValidator();
-
-            var command = new ValidateIdentityV2Cmd
-            {
-                Token1 = "reference-token",
-                BestImageToken = "best-image-token",
-                Method = method
-            };
-
-            var result = validator.Validate(command);
+            var result = new ValidateIdentityV2CmdValidator().Validate(BuildCommand(BuildTracking()));
 
             Assert.That(result.IsValid, Is.True);
         }
 
-        [TestCase("4")]
-        [TestCase("1")]
-        [TestCase("")]
-        public void Validator_RejectsUnsupportedMethods(string method)
+        [TestCase("CED")]
+        [TestCase("PASSPORT")]
+        public void Validator_AcceptsSupportedDocumentTypes(string documentType)
         {
-            var validator = new ValidateIdentityV2CmdValidator();
+            var command = BuildCommand();
+            command.DocumentType = documentType;
 
-            var command = new ValidateIdentityV2Cmd
-            {
-                Token1 = "reference-token",
-                BestImageToken = "best-image-token",
-                Method = method
-            };
+            var result = new ValidateIdentityV2CmdValidator().Validate(command);
 
-            var result = validator.Validate(command);
+            Assert.That(result.IsValid, Is.True);
+        }
+
+        [TestCase("")]
+        [TestCase("DNI")]
+        [TestCase("ced")]
+        public void Validator_RejectsUnsupportedDocumentTypes(string documentType)
+        {
+            var command = BuildCommand();
+            command.DocumentType = documentType;
+
+            var result = new ValidateIdentityV2CmdValidator().Validate(command);
+
+            Assert.That(result.IsValid, Is.False);
+        }
+
+        [Test]
+        public void Validator_RequiresIdT24()
+        {
+            var command = BuildCommand();
+            command.IdT24 = string.Empty;
+
+            var result = new ValidateIdentityV2CmdValidator().Validate(command);
+
+            Assert.That(result.IsValid, Is.False);
+        }
+
+        [Test]
+        public void Validator_RequiresToken1()
+        {
+            var command = BuildCommand();
+            command.Token1 = string.Empty;
+
+            var result = new ValidateIdentityV2CmdValidator().Validate(command);
+
+            Assert.That(result.IsValid, Is.False);
+        }
+
+        [Test]
+        public void Validator_RequiresBestImageToken()
+        {
+            var command = BuildCommand();
+            command.BestImageToken = string.Empty;
+
+            var result = new ValidateIdentityV2CmdValidator().Validate(command);
 
             Assert.That(result.IsValid, Is.False);
         }
@@ -92,236 +182,295 @@ namespace onboarding_micro_person.Tests.UnitTests.Application.Facephi
         [Test]
         public void Validator_RejectsOperationIdThatIsNotAUuid()
         {
-            var validator = new ValidateIdentityV2CmdValidator();
-
-            var command = new ValidateIdentityV2Cmd
+            var command = BuildCommand(new FacephiTrackingExtraData
             {
-                Token1 = "reference-token",
-                BestImageToken = "best-image-token",
-                Method = "3",
-                Tracking = new FacephiTrackingExtraData
-                {
-                    ExtraData = "tracking-extra-data",
-                    OperationId = "no-es-uuid"
-                }
-            };
+                ExtraData = "extra",
+                OperationId = "no-es-uuid"
+            });
 
-            var result = validator.Validate(command);
+            var result = new ValidateIdentityV2CmdValidator().Validate(command);
 
             Assert.That(result.IsValid, Is.False);
         }
 
-        // ─────────────────────────────── Handler ─────────────────────────────
+        [Test]
+        public void Validator_AllowsTrackingWithoutOperationId()
+        {
+            var command = BuildCommand(new FacephiTrackingExtraData
+            {
+                ExtraData = "extra",
+                OperationId = string.Empty
+            });
+
+            var result = new ValidateIdentityV2CmdValidator().Validate(command);
+
+            Assert.That(result.IsValid, Is.True);
+        }
+
+        // ──────────────────────── Mapeo hacia Facephi ────────────────────────────
 
         [Test]
-        public async Task Handler_MapsRequest_AndReturnsResult()
+        public async Task Handler_MapsTheRequestToFacephi()
         {
-            var expected = new PassiveLivenessResult
-            {
-                ServiceTransactionId = Guid.NewGuid().ToString(),
-                ServiceResultCode = 0,
-                facialAuthenticationResult = 3,
-                facialAuthenticationLog = "Positive",
-                facialAuthenticationSimilarity = 0.9921,
-                passiveLivenessResult = FacephiLivenessResult.Live,
-                passiveLivenessLog = "Live"
-            };
+            SetupFacePhi();
 
-            _facePhiMock
-                .Setup(x => x.EvaluatePassiveLivenessToken(
-                    It.IsAny<PassiveLivenessRequest>(),
-                    It.IsAny<CancellationToken>()))
-                .ReturnsAsync(expected);
+            var tracking = BuildTracking();
+            var command = BuildCommand(tracking);
 
-            var operationId = Guid.NewGuid().ToString();
-
-            var command = new ValidateIdentityV2Cmd
-            {
-                Token1 = "reference-token",
-                BestImageToken = "best-image-token",
-                Method = "3",
-                Tracking = new FacephiTrackingExtraData
-                {
-                    ExtraData = "tracking-extra-data",
-                    OperationId = operationId
-                }
-            };
-
-            var result = await _handler.Handle(command, CancellationToken.None);
-
-            Assert.Multiple(() =>
-            {
-                Assert.That(result.Outcome, Is.EqualTo(ValidationOutcome.Approved));
-                Assert.That(result.Facephi.ServiceResultCode, Is.EqualTo(0));
-                Assert.That(result.Facephi.facialAuthenticationResult, Is.EqualTo(3));
-                Assert.That(
-                    result.Facephi.passiveLivenessResult,
-                    Is.EqualTo(FacephiLivenessResult.Live));
-            });
+            await BuildHandler().Handle(command, CancellationToken.None);
 
             _facePhiMock.Verify(
                 x => x.EvaluatePassiveLivenessToken(
                     It.Is<PassiveLivenessRequest>(request =>
                         request.Token1 == command.Token1 &&
                         request.BestImageToken == command.BestImageToken &&
-                        request.Method == command.Method &&
-                        request.TrackingToken == command.Tracking.ExtraData &&
-                        request.OperationId == command.Tracking.OperationId),
+                        request.TrackingToken == tracking.ExtraData &&
+                        request.OperationId == tracking.OperationId),
                     It.IsAny<CancellationToken>()),
                 Times.Once);
         }
 
-        // ─────────────────────── Regla de decisión ───────────────────────────
-        // Códigos según la documentación de Identity Validation V2.
-        // facial:   1 NEGATIVE · 3 POSITIVE · 0, 4, 5 no evaluable
-        // liveness: 3 Live · 17 NoLive · 10, 15 error técnico · resto no evaluable
-
-        [TestCase(3, 3, ValidationOutcome.Approved)]
-        [TestCase(1, 3, ValidationOutcome.Rejected)]
-        [TestCase(3, 17, ValidationOutcome.Rejected)]
-        [TestCase(3, 0, ValidationOutcome.Retry)]
-        [TestCase(3, 4, ValidationOutcome.Retry)]
-        [TestCase(3, 18, ValidationOutcome.Retry)]
-        [TestCase(0, 3, ValidationOutcome.Retry)]
-        [TestCase(4, 3, ValidationOutcome.Retry)]
-        [TestCase(3, 10, ValidationOutcome.Error)]
-        [TestCase(3, 15, ValidationOutcome.Error)]
-        public async Task Handler_EvaluatesOutcomeFromFacephiCodes(
-            int facialResult, int livenessResult, ValidationOutcome expectedOutcome)
+        [Test]
+        public async Task Handler_SendsTheConfiguredAuthenticationMethod()
         {
-            _facePhiMock
-                .Setup(x => x.EvaluatePassiveLivenessToken(
-                    It.IsAny<PassiveLivenessRequest>(),
-                    It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new PassiveLivenessResult
-                {
-                    ServiceResultCode = 0,
-                    facialAuthenticationResult = facialResult,
-                    facialAuthenticationSimilarity = 0.99,
-                    passiveLivenessResult = (FacephiLivenessResult)livenessResult
-                });
+            SetupFacePhi();
 
-            var result = await _handler.Handle(BuildCommand(), CancellationToken.None);
+            var expectedMethod = ((int)FacePhiAuthenticateMethod.TokenToTemplate).ToString();
 
-            Assert.That(result.Outcome, Is.EqualTo(expectedOutcome));
+            await BuildHandler().Handle(BuildCommand(), CancellationToken.None);
+
+            _facePhiMock.Verify(
+                x => x.EvaluatePassiveLivenessToken(
+                    It.Is<PassiveLivenessRequest>(request => request.Method == expectedMethod),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+
+        // ──────────── Veredicto: toggle de custom liveness APAGADO ───────────────
+
+        [TestCase(FacialPositive, FacephiLivenessResult.Live, FacialValidationStatus.Approved)]
+        [TestCase(FacialNegative, FacephiLivenessResult.Live, FacialValidationStatus.Rejected)]
+        [TestCase(FacialNone, FacephiLivenessResult.Live, FacialValidationStatus.Rejected)]
+        [TestCase(FacialPositive, FacephiLivenessResult.NoLive, FacialValidationStatus.Rejected)]
+        [TestCase(FacialPositive, FacephiLivenessResult.None, FacialValidationStatus.Rejected)]
+        [TestCase(FacialPositive, FacephiLivenessResult.NoneBecauseBadQuality, FacialValidationStatus.Rejected)]
+        public async Task Handler_TrustsFacephiVerdict_WhenCustomCheckIsDisabled(
+            int facialResult, FacephiLivenessResult liveness, FacialValidationStatus expected)
+        {
+            _settings.FACIAL_VALIDATION_CUSTOM_LIVENESS_CHECK = false;
+            SetupFacePhi(facialResult: facialResult, liveness: liveness);
+
+            var result = await BuildHandler().Handle(BuildCommand(), CancellationToken.None);
+
+            Assert.That(result.Status, Is.EqualTo(expected));
         }
 
         [Test]
-        public async Task Handler_ReturnsError_WhenServiceResultCodeIsNotZero()
+        public async Task Handler_DoesNotUseTheEvaluator_WhenCustomCheckIsDisabled()
         {
-            _facePhiMock
-                .Setup(x => x.EvaluatePassiveLivenessToken(
-                    It.IsAny<PassiveLivenessRequest>(),
-                    It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new PassiveLivenessResult
-                {
-                    ServiceResultCode = 1,
-                    facialAuthenticationResult = 3,
-                    passiveLivenessResult = FacephiLivenessResult.Live
-                });
+            _settings.FACIAL_VALIDATION_CUSTOM_LIVENESS_CHECK = false;
+            SetupFacePhi();
 
-            var result = await _handler.Handle(BuildCommand(), CancellationToken.None);
-
-            Assert.That(result.Outcome, Is.EqualTo(ValidationOutcome.Error));
-        }
-
-        // ──────────────────────────── Umbral ─────────────────────────────────
-
-        [Test]
-        public async Task Handler_Rejects_WhenSimilarityIsBelowThreshold()
-        {
-            _evaluatorMock
-                .Setup(x => x.MeetsSimilarityThreshold(It.IsAny<double>()))
-                .Returns(false);
-
-            _facePhiMock
-                .Setup(x => x.EvaluatePassiveLivenessToken(
-                    It.IsAny<PassiveLivenessRequest>(),
-                    It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new PassiveLivenessResult
-                {
-                    ServiceResultCode = 0,
-                    facialAuthenticationResult = 3,
-                    facialAuthenticationSimilarity = 0.60,
-                    passiveLivenessResult = FacephiLivenessResult.Live
-                });
-
-            var result = await _handler.Handle(BuildCommand(), CancellationToken.None);
-
-            Assert.That(result.Outcome, Is.EqualTo(ValidationOutcome.Rejected));
-        }
-
-        [Test]
-        public async Task Handler_DoesNotCheckThreshold_WhenFacephiRejects()
-        {
-            // El umbral es un filtro adicional sobre un POSITIVE,
-            // nunca un sustituto del veredicto de Facephi.
-            _facePhiMock
-                .Setup(x => x.EvaluatePassiveLivenessToken(
-                    It.IsAny<PassiveLivenessRequest>(),
-                    It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new PassiveLivenessResult
-                {
-                    ServiceResultCode = 0,
-                    facialAuthenticationResult = 1,          // NEGATIVE
-                    facialAuthenticationSimilarity = 0.99,   // similitud alta, da igual
-                    passiveLivenessResult = FacephiLivenessResult.Live
-                });
-
-            var result = await _handler.Handle(BuildCommand(), CancellationToken.None);
-
-            Assert.That(result.Outcome, Is.EqualTo(ValidationOutcome.Rejected));
+            await BuildHandler().Handle(BuildCommand(), CancellationToken.None);
 
             _evaluatorMock.Verify(
-                x => x.MeetsSimilarityThreshold(It.IsAny<double>()),
+                x => x.MeetsSimilarityThreshold(It.IsAny<double>()), Times.Never);
+        }
+
+        // ──────────── Veredicto: toggle de custom liveness ENCENDIDO ─────────────
+
+        [Test]
+        public async Task Handler_Approves_WhenThresholdIsMetAndSubjectIsAlive()
+        {
+            _settings.FACIAL_VALIDATION_CUSTOM_LIVENESS_CHECK = true;
+            _evaluatorMock.Setup(x => x.MeetsSimilarityThreshold(It.IsAny<double>())).Returns(true);
+            SetupFacePhi(liveness: FacephiLivenessResult.Live);
+
+            var result = await BuildHandler().Handle(BuildCommand(), CancellationToken.None);
+
+            Assert.That(result.Status, Is.EqualTo(FacialValidationStatus.Approved));
+        }
+
+        [Test]
+        public async Task Handler_Rejects_WhenThresholdIsNotMet()
+        {
+            _settings.FACIAL_VALIDATION_CUSTOM_LIVENESS_CHECK = true;
+            _evaluatorMock.Setup(x => x.MeetsSimilarityThreshold(It.IsAny<double>())).Returns(false);
+            SetupFacePhi(liveness: FacephiLivenessResult.Live, similarity: 0.60);
+
+            var result = await BuildHandler().Handle(BuildCommand(), CancellationToken.None);
+
+            Assert.That(result.Status, Is.EqualTo(FacialValidationStatus.Rejected));
+        }
+
+        [Test]
+        public async Task Handler_Rejects_WhenThresholdIsMetButSubjectIsNotAlive()
+        {
+            _settings.FACIAL_VALIDATION_CUSTOM_LIVENESS_CHECK = true;
+            _evaluatorMock.Setup(x => x.MeetsSimilarityThreshold(It.IsAny<double>())).Returns(true);
+            SetupFacePhi(liveness: FacephiLivenessResult.NoLive);
+
+            var result = await BuildHandler().Handle(BuildCommand(), CancellationToken.None);
+
+            Assert.That(result.Status, Is.EqualTo(FacialValidationStatus.Rejected));
+        }
+
+        [Test]
+        public async Task Handler_PassesTheSimilarityToTheEvaluator()
+        {
+            _settings.FACIAL_VALIDATION_CUSTOM_LIVENESS_CHECK = true;
+            SetupFacePhi(similarity: 0.8123);
+
+            await BuildHandler().Handle(BuildCommand(), CancellationToken.None);
+
+            _evaluatorMock.Verify(
+                x => x.MeetsSimilarityThreshold(0.8123), Times.Once);
+        }
+
+        // ───────────────────────── Fallo del servicio ────────────────────────────
+
+        [Test]
+        public async Task Handler_Rejects_WhenServiceResultCodeIsNotZero()
+        {
+            // Comportamiento actual: un fallo de Facephi se reporta como rechazo.
+            // Si se decide diferenciarlo, este test debe cambiar.
+            SetupFacePhi(serviceResultCode: 1);
+
+            var result = await BuildHandler().Handle(BuildCommand(), CancellationToken.None);
+
+            Assert.That(result.Status, Is.EqualTo(FacialValidationStatus.Rejected));
+        }
+
+        // ────────────────────────────- Persistencia ──────────────────────────────
+
+        [Test]
+        public async Task Handler_PersistsTheBiometricDocument()
+        {
+            SetupFacePhi();
+
+            var tracking = BuildTracking();
+            var command = BuildCommand(tracking);
+
+            await BuildHandler().Handle(command, CancellationToken.None);
+
+            _repositoryMock.Verify(
+                x => x.UpsertAsync(
+                    It.Is<FacePhiBiometricDocument>(document =>
+                        document.IdT24 == command.IdT24 &&
+                        document.DocumentType == command.DocumentType &&
+                        document.Token1 == command.Token1 &&
+                        document.Token2 == command.BestImageToken &&
+                        document.Tracking != null &&
+                        document.Tracking.ExtraData == tracking.ExtraData &&
+                        document.Tracking.OperationId == tracking.OperationId),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+
+        [Test]
+        public async Task Handler_PersistsWithoutTracking_WhenTrackingIsNotProvided()
+        {
+            SetupFacePhi();
+
+            await BuildHandler().Handle(BuildCommand(), CancellationToken.None);
+
+            _repositoryMock.Verify(
+                x => x.UpsertAsync(
+                    It.Is<FacePhiBiometricDocument>(document => document.Tracking == null),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+
+        [Test]
+        public void Handler_PropagatesTheException_WhenPersistenceFails()
+        {
+            SetupFacePhi();
+
+            _repositoryMock
+                .Setup(x => x.UpsertAsync(
+                    It.IsAny<FacePhiBiometricDocument>(), It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new InvalidOperationException("mongo down"));
+
+            Assert.ThrowsAsync<InvalidOperationException>(
+                () => BuildHandler().Handle(BuildCommand(BuildTracking()), CancellationToken.None));
+        }
+
+        [Test]
+        public void Handler_DoesNotCloseTracking_WhenPersistenceFails()
+        {
+            // Este test documenta una consecuencia del "throw" en el catch:
+            // si Mongo falla, la operación queda ABIERTA en Facephi.
+            // Si se quita el throw, este test debe invertirse.
+            SetupFacePhi();
+
+            _repositoryMock
+                .Setup(x => x.UpsertAsync(
+                    It.IsAny<FacePhiBiometricDocument>(), It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new InvalidOperationException("mongo down"));
+
+            Assert.ThrowsAsync<InvalidOperationException>(
+                () => BuildHandler().Handle(BuildCommand(BuildTracking()), CancellationToken.None));
+
+            _facePhiMock.Verify(
+                x => x.FinishTrackingAsync(
+                    It.IsAny<bool>(), It.IsAny<string>(),
+                    It.IsAny<string?>(), It.IsAny<CancellationToken>()),
                 Times.Never);
         }
 
-        // ────────────────────────── Deserialización ──────────────────────────
+        // ────────────────────────────── Tracking ─────────────────────────────────
 
         [Test]
-        public void Deserializes_TheDocumentedFacephiResponse()
+        public async Task Handler_ClosesTrackingAsApproved_WhenValidationSucceeds()
         {
-            // Ejemplo tomado de la documentación de Identity Validation V2.
-            // Este test detecta un binding roto: construir el objeto en memoria
-            // nunca ejercita los nombres del JSON.
-            const string json = """
-            {
-              "serviceTransactionId": "2db602ee-3564-4304-af95-92a52eaae12d",
-              "serviceResultCode": 0,
-              "serviceResultLog": "[identity] Service executed ok",
-              "serviceTime": "2235",
-              "facialAuthenticationResult": 3,
-              "facialAuthenticationLog": "Positive",
-              "facialAuthenticationSimilarity": 0.99214232,
-              "passiveLivenessResult": 3,
-              "passiveLivenessLog": "Live"
-            }
-            """;
+            SetupFacePhi();
 
-            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-            var result = JsonSerializer.Deserialize<PassiveLivenessResult>(json, options)!;
+            var tracking = BuildTracking();
+
+            await BuildHandler().Handle(BuildCommand(tracking), CancellationToken.None);
+
+            _facePhiMock.Verify(
+                x => x.FinishTrackingAsync(
+                    true,
+                    FacePhiTrackingReason.None.ToApiString(),
+                    tracking.ExtraData,
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+
+        [Test]
+        public async Task Handler_ClosesTrackingAsNotPassed_WhenValidationFails()
+        {
+            SetupFacePhi(facialResult: FacialNegative);
+
+            var tracking = BuildTracking();
+
+            await BuildHandler().Handle(BuildCommand(tracking), CancellationToken.None);
+
+            _facePhiMock.Verify(
+                x => x.FinishTrackingAsync(
+                    false,
+                    FacePhiTrackingReason.FacialAuthenticationNotPassed.ToApiString(),
+                    tracking.ExtraData,
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+
+        // ─────────────────────────────── Resultado ───────────────────────────────
+
+        [Test]
+        public async Task Handler_ReturnsTheFacephiResponseUntouched()
+        {
+            SetupFacePhi(similarity: 0.9876);
+
+            var result = await BuildHandler().Handle(BuildCommand(), CancellationToken.None);
 
             Assert.Multiple(() =>
             {
-                Assert.That(result.ServiceTransactionId, Is.Not.Empty);
-                Assert.That(result.ServiceResultCode, Is.EqualTo(0));
-                Assert.That(result.ServiceTime, Is.EqualTo("2235"));
-                Assert.That(result.facialAuthenticationResult, Is.EqualTo(3));
-                Assert.That(result.facialAuthenticationSimilarity, Is.EqualTo(0.99214232).Within(0.0000001));
-                Assert.That(
-                    result.passiveLivenessResult,
-                    Is.EqualTo(FacephiLivenessResult.Live));
+                Assert.That(result.Data, Is.Not.Null);
+                Assert.That(result.Data.facialAuthenticationSimilarity, Is.EqualTo(0.9876).Within(0.00001));
+                Assert.That(result.Data.ServiceTransactionId, Is.Not.Empty);
             });
         }
-
-        // ───────────────────────────── Auxiliares ────────────────────────────
-
-        private static ValidateIdentityV2Cmd BuildCommand() => new()
-        {
-            Token1 = "reference-token",
-            BestImageToken = "best-image-token",
-            Method = "3"
-        };
     }
 }
