@@ -1,6 +1,10 @@
 // Ruta destino:
 // tests/UnitTests/Endpoints/FacephiEndpointsTests.cs
 //
+// Versión para cuando el GET pasa por MediatR (GetFacePhiDocumentQry).
+// La lógica de HasDocument se prueba en GetFacePhiDocumentQryTests: aquí
+// sólo se verifica el contrato HTTP de los endpoints.
+//
 // REQUISITOS PARA QUE ESTE ARCHIVO COMPILE:
 //
 // 1. Los métodos de Endpoints/FacePhi.cs deben ser "public static" en vez de
@@ -17,10 +21,10 @@ using MediatR;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
 using onboarding_micro_person.Application.Facephi.Commands;
+using onboarding_micro_person.Application.Facephi.Queries;
 using onboarding_micro_person.Common.Entities;
 using onboarding_micro_person.Common.Enums.Biometric;
 using onboarding_micro_person.Common.Enums.FacePhi;
-using onboarding_micro_person.Common.Interfaces.Biometric;
 using onboarding_micro_person.Common.Models.Biometric;
 using onboarding_micro_person.Endpoints;
 
@@ -31,13 +35,11 @@ namespace onboarding_micro_person.Tests.UnitTests.Endpoints
     public class FacephiEndpointsTests
     {
         private Mock<ISender> _senderMock = default!;
-        private Mock<IFacePhiBiometricRepository> _repositoryMock = default!;
 
         [SetUp]
         public void Setup()
         {
             _senderMock = new Mock<ISender>();
-            _repositoryMock = new Mock<IFacePhiBiometricRepository>();
         }
 
         private static PassiveLivenessResult BuildFacephiResult() => new()
@@ -74,7 +76,8 @@ namespace onboarding_micro_person.Tests.UnitTests.Endpoints
             {
                 Assert.That(json, Is.Not.Null, "Se esperaba un JsonHttpResult<PassiveLivenessResult>.");
                 Assert.That(json!.StatusCode, Is.EqualTo(StatusCodes.Status200OK));
-                Assert.That(json.Value, Is.SameAs(data), "El cuerpo debe ser la respuesta de Facephi sin modificar.");
+                Assert.That(json.Value, Is.SameAs(data),
+                    "El cuerpo debe ser la respuesta de Facephi sin modificar.");
             });
         }
 
@@ -126,7 +129,8 @@ namespace onboarding_micro_person.Tests.UnitTests.Endpoints
             Assert.Multiple(() =>
             {
                 Assert.That(json, Is.Not.Null,
-                    "validate-face debe responder igual que validate: JsonHttpResult, no Results.Ok del objeto completo.");
+                    "validate-face debe responder igual que validate: JsonHttpResult, " +
+                    "no Results.Ok con el objeto completo.");
                 Assert.That(json!.StatusCode, Is.EqualTo(StatusCodes.Status200OK));
                 Assert.That(json.Value, Is.SameAs(data));
             });
@@ -147,7 +151,21 @@ namespace onboarding_micro_person.Tests.UnitTests.Endpoints
             {
                 Assert.That(json, Is.Not.Null);
                 Assert.That(json!.StatusCode, Is.EqualTo(StatusCodes.Status422UnprocessableEntity));
+                Assert.That(json.Value, Is.SameAs(data));
             });
+        }
+
+        [Test]
+        public async Task ValidateFaceOnly_SendsTheCommandThroughMediatR()
+        {
+            SetupSender<ValidateFaceOnlyCmd>(FacialValidationStatus.Approved, BuildFacephiResult());
+
+            var command = new ValidateFaceOnlyCmd { IdT24 = "123456789" };
+
+            await Facephi.ValidateFaceOnly(command, _senderMock.Object, CancellationToken.None);
+
+            _senderMock.Verify(
+                x => x.Send(command, It.IsAny<CancellationToken>()), Times.Once);
         }
 
         [Test]
@@ -176,14 +194,20 @@ namespace onboarding_micro_person.Tests.UnitTests.Endpoints
         // ──────────────── GET /api/v1/facephi/document/{idT24} ───────────────────
 
         [Test]
-        public async Task GetDocument_ReturnsHasDocumentFalse_WhenThereIsNoRecord()
+        public async Task GetDocument_DelegatesToMediatRAndReturnsOk()
         {
-            _repositoryMock
-                .Setup(x => x.GetByIdT24Async(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync((FacePhiBiometricDocument?)null);
+            var expected = new GetFacePhiDocumentResponse
+            {
+                HasDocument = true,
+                DocumentType = "CED"
+            };
+
+            _senderMock
+                .Setup(x => x.Send(It.IsAny<GetFacePhiDocumentQry>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(expected);
 
             var result = await Facephi.GetDocumentByIdT24(
-                "123456789", _repositoryMock.Object, CancellationToken.None);
+                "123456789", _senderMock.Object, CancellationToken.None);
 
             var ok = result as Ok<GetFacePhiDocumentResponse>;
 
@@ -191,85 +215,25 @@ namespace onboarding_micro_person.Tests.UnitTests.Endpoints
             {
                 Assert.That(ok, Is.Not.Null);
                 Assert.That(ok!.StatusCode, Is.EqualTo(StatusCodes.Status200OK));
-                Assert.That(ok.Value!.HasDocument, Is.False);
+                Assert.That(ok.Value, Is.SameAs(expected));
             });
         }
 
         [Test]
-        public async Task GetDocument_ReturnsHasDocumentTrue_WhenTheDocumentHasToken1()
+        public async Task GetDocument_PassesTheRouteIdT24ToTheQuery()
         {
-            _repositoryMock
-                .Setup(x => x.GetByIdT24Async(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new FacePhiBiometricDocument
-                {
-                    IdT24 = "123456789",
-                    DocumentType = "CED",
-                    Token1 = "stored-document-token",
-                    Method = 5
-                });
+            _senderMock
+                .Setup(x => x.Send(It.IsAny<GetFacePhiDocumentQry>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GetFacePhiDocumentResponse { HasDocument = false });
 
-            var result = await Facephi.GetDocumentByIdT24(
-                "123456789", _repositoryMock.Object, CancellationToken.None);
+            await Facephi.GetDocumentByIdT24(
+                "987654321", _senderMock.Object, CancellationToken.None);
 
-            var ok = result as Ok<GetFacePhiDocumentResponse>;
-
-            Assert.Multiple(() =>
-            {
-                Assert.That(ok, Is.Not.Null);
-                Assert.That(ok!.Value!.HasDocument, Is.True);
-                Assert.That(ok.Value.DocumentType, Is.EqualTo("CED"));
-            });
-        }
-
-        [TestCase("")]
-        [TestCase("   ")]
-        public async Task GetDocument_ReturnsHasDocumentFalse_WhenToken1IsMissing(string token1)
-        {
-            // El front usa este endpoint para decidir si puede llamar a validate-face.
-            // Un registro sin token1 no sirve para eso: debe reportarse como false.
-            _repositoryMock
-                .Setup(x => x.GetByIdT24Async(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new FacePhiBiometricDocument
-                {
-                    IdT24 = "123456789",
-                    DocumentType = "CED",
-                    Token1 = token1,
-                    Method = 5
-                });
-
-            var result = await Facephi.GetDocumentByIdT24(
-                "123456789", _repositoryMock.Object, CancellationToken.None);
-
-            var ok = result as Ok<GetFacePhiDocumentResponse>;
-
-            Assert.That(ok!.Value!.HasDocument, Is.False);
-        }
-
-        [Test]
-        public async Task GetDocument_NeverExposesTheStoredTokens()
-        {
-            _repositoryMock
-                .Setup(x => x.GetByIdT24Async(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new FacePhiBiometricDocument
-                {
-                    IdT24 = "123456789",
-                    DocumentType = "CED",
-                    Token1 = "stored-document-token",
-                    Token2 = "stored-best-image",
-                    Method = 5
-                });
-
-            var result = await Facephi.GetDocumentByIdT24(
-                "123456789", _repositoryMock.Object, CancellationToken.None);
-
-            var ok = result as Ok<GetFacePhiDocumentResponse>;
-            var serialized = System.Text.Json.JsonSerializer.Serialize(ok!.Value);
-
-            Assert.Multiple(() =>
-            {
-                Assert.That(serialized, Does.Not.Contain("stored-document-token"));
-                Assert.That(serialized, Does.Not.Contain("stored-best-image"));
-            });
+            _senderMock.Verify(
+                x => x.Send(
+                    It.Is<GetFacePhiDocumentQry>(qry => qry.IdT24 == "987654321"),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
         }
     }
 }
