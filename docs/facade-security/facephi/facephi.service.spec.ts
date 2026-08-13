@@ -16,20 +16,6 @@ describe('FacephiService', () => {
 
   const baseUrl = 'http://mock-base-url';
 
-  const buildConfig = (mockEnabled = 'false') => ({
-    get: jest.fn((key: string) => {
-      if (key === 'ONBOARDING_PERSON_BASE_URL') {
-        return baseUrl;
-      }
-
-      if (key === 'FACEPHI_MOCK_ENABLED') {
-        return mockEnabled;
-      }
-
-      return undefined;
-    }),
-  });
-
   const payload = {
     idT24: '123456789',
     token1: 'document-token',
@@ -55,8 +41,8 @@ describe('FacephiService', () => {
     passiveLivenessLog: 'Live',
   };
 
-  const buildModule = async (mockEnabled = 'false'): Promise<TestingModule> =>
-    Test.createTestingModule({
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
       providers: [
         FacephiService,
         {
@@ -70,7 +56,9 @@ describe('FacephiService', () => {
         },
         {
           provide: ConfigService,
-          useValue: buildConfig(mockEnabled),
+          useValue: {
+            get: jest.fn().mockReturnValue(baseUrl),
+          },
         },
         {
           provide: Logger,
@@ -82,12 +70,12 @@ describe('FacephiService', () => {
       ],
     }).compile();
 
-  beforeEach(async () => {
-    const module = await buildModule();
-
     service = module.get<FacephiService>(FacephiService);
     httpService = module.get<HttpService>(HttpService);
     logger = module.get<Logger>(Logger);
+
+    (httpService.axiosRef.post as jest.Mock).mockReset();
+    (httpService.axiosRef.get as jest.Mock).mockReset();
   });
 
   it('should be defined', () => {
@@ -119,7 +107,7 @@ describe('FacephiService', () => {
       );
     });
 
-    it('should forward headers and use the first value when headers are arrays', async () => {
+    it('should forward headers and use first value when headers are arrays', async () => {
       (httpService.axiosRef.post as jest.Mock).mockResolvedValue({
         data: approvedResponse,
       });
@@ -281,28 +269,17 @@ describe('FacephiService', () => {
         expect.any(Object),
       );
     });
-  });
 
-  describe('mocked mode', () => {
-    it('should not call downstream when FACEPHI_MOCK_ENABLED is true', async () => {
-      const module = await buildModule('true');
+    it('should propagate the downstream error', async () => {
+      (httpService.axiosRef.get as jest.Mock).mockRejectedValue({
+        isAxiosError: true,
+        message: 'Request failed with status code 500',
+        response: { status: 500, data: { message: 'error' } },
+      });
 
-      const mockedService = module.get<FacephiService>(FacephiService);
-      const mockedHttp = module.get<HttpService>(HttpService);
-
-      // El mock decide al azar: se acepta la respuesta aprobada o el 422.
-      await mockedService
-        .validateBiometric(payload as any, headers as any)
-        .then((response) => {
-          expect(response.serviceResultCode).toBe(0);
-          expect(response.facialAuthenticationResult).toBe(3);
-        })
-        .catch((error) => {
-          expect(error).toBeInstanceOf(HttpException);
-          expect(error.getStatus()).toBe(422);
-        });
-
-      expect(mockedHttp.axiosRef.post).not.toHaveBeenCalled();
+      await expect(
+        service.getDocumentByIdT24('123456789', headers as any),
+      ).rejects.toBeInstanceOf(HttpException);
     });
   });
 });

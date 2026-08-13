@@ -9,7 +9,6 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { randomInt, randomUUID } from 'crypto';
 
 import {
   AxiosLikeError,
@@ -42,10 +41,6 @@ export class FacephiService {
     payload: ValidateBiometricDto,
     headers: RequestHeaders,
   ): Promise<FacephiValidationResponse> {
-    if (this.isMockEnabled()) {
-      return this.buildMockedValidation('validateBiometric', headers);
-    }
-
     return this.post<ValidateBiometricDto, FacephiValidationResponse>(
       FacephiBackendUrls.validateBiometric,
       payload,
@@ -62,10 +57,6 @@ export class FacephiService {
     payload: ValidateFaceOnlyDto,
     headers: RequestHeaders,
   ): Promise<FacephiValidationResponse> {
-    if (this.isMockEnabled()) {
-      return this.buildMockedValidation('validateFaceOnly', headers);
-    }
-
     return this.post<ValidateFaceOnlyDto, FacephiValidationResponse>(
       FacephiBackendUrls.validateFaceOnly,
       payload,
@@ -84,17 +75,6 @@ export class FacephiService {
   ): Promise<FacephiDocumentResponse> {
     const methodName = 'getDocumentByIdT24';
     const path = `${FacephiBackendUrls.documentByIdT24}/${encodeURIComponent(idT24)}`;
-
-    if (this.isMockEnabled()) {
-      this.logger.log(`Respuesta simulada de ${path}`, {
-        requestId: this.getRequestId(headers) || undefined,
-        serviceName: SERVICE_NAME,
-        method: methodName,
-      });
-
-      return { hasDocument: randomInt(0, 2) === 1, documentType: 'CED' };
-    }
-
     const requestId = this.getRequestId(headers);
     const baseUrl = this.getBaseUrl();
     const url = `${baseUrl}${path}`;
@@ -204,47 +184,6 @@ export class FacephiService {
     throw new InternalServerErrorException(
       'Error interno procesando la solicitud de validacion biometrica',
     );
-  }
-
-  /**
-   * Respuesta simulada para pruebas sin depender del microservicio ni de
-   * tokens reales de Facephi. Reproduce el contrato completo, incluido el 422
-   * del rechazo, para que la app pueda integrarse contra el comportamiento real.
-   */
-  private buildMockedValidation(
-    methodName: string,
-    headers: RequestHeaders,
-  ): FacephiValidationResponse {
-    const approved = randomInt(0, 2) === 1;
-
-    const response: FacephiValidationResponse = {
-      serviceTransactionId: randomUUID(),
-      serviceResultCode: 0,
-      serviceResultLog: '[identity] mocked response',
-      serviceTime: '120',
-      facialAuthenticationResult: approved ? 3 : 1,
-      facialAuthenticationLog: approved ? 'Positive' : 'Negative',
-      facialAuthenticationSimilarity: approved ? 0.9921 : 0.1132,
-      passiveLivenessResult: approved ? 3 : 17,
-      passiveLivenessLog: approved ? 'Live' : 'NoLive',
-    };
-
-    this.logger.log('Respuesta simulada de validacion biometrica', {
-      requestId: this.getRequestId(headers) || undefined,
-      serviceName: SERVICE_NAME,
-      method: methodName,
-      description: `Respuesta simulada: ${approved ? 'aprobada' : 'no aprobada'}`,
-    });
-
-    if (!approved) {
-      throw new HttpException(response, HttpStatus.UNPROCESSABLE_ENTITY);
-    }
-
-    return response;
-  }
-
-  private isMockEnabled(): boolean {
-    return this.configService.get<string>('FACEPHI_MOCK_ENABLED') === 'true';
   }
 
   private getBaseUrl(): string {
