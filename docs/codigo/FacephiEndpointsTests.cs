@@ -1,18 +1,14 @@
 // Ruta destino:
 // tests/UnitTests/Endpoints/FacephiEndpointsTests.cs
 //
-// Versión para cuando el GET pasa por MediatR (GetFacePhiDocumentQry).
-// La lógica de HasDocument se prueba en GetFacePhiDocumentQryTests: aquí
-// sólo se verifica el contrato HTTP de los endpoints.
+// Versión para cuando los endpoints devuelven { isValid } con HTTP 200 en
+// ambos resultados: la interpretación de los códigos de Facephi vive en el
+// handler y el consumidor sólo recibe el booleano.
 //
 // REQUISITOS PARA QUE ESTE ARCHIVO COMPILE:
 //
-// 1. Los métodos de Endpoints/FacePhi.cs deben ser "public static" en vez de
-//    "private static". Es además lo que hace Biometrics.cs en el resto del micro.
-//
-// 2. El proyecto de pruebas necesita la referencia al framework de ASP.NET Core
-//    para reconocer IResult y los tipos de Microsoft.AspNetCore.Http.HttpResults:
-//
+// 1. Los métodos de Endpoints/FacePhi.cs deben ser "public static".
+// 2. El proyecto de pruebas necesita:
 //    <ItemGroup>
 //      <FrameworkReference Include="Microsoft.AspNetCore.App" />
 //    </ItemGroup>
@@ -51,59 +47,76 @@ namespace onboarding_micro_person.Tests.UnitTests.Endpoints
             passiveLivenessResult = FacephiLivenessResult.Live
         };
 
-        private void SetupSender<TRequest>(FacialValidationStatus status, PassiveLivenessResult data)
+        private void SetupSender<TRequest>(FacialValidationStatus status)
             where TRequest : IRequest<ValidateIdentityV2Result>
         {
             _senderMock
                 .Setup(x => x.Send(It.IsAny<TRequest>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new ValidateIdentityV2Result(status, data));
+                .ReturnsAsync(new ValidateIdentityV2Result(status, BuildFacephiResult()));
         }
 
         // ─────────────────────── POST /api/v1/facephi/validate ───────────────────
 
         [Test]
-        public async Task ValidateIdentityV2_Returns200_WhenApproved()
+        public async Task ValidateIdentityV2_ReturnsIsValidTrue_WhenApproved()
         {
-            var data = BuildFacephiResult();
-            SetupSender<ValidateIdentityV2Cmd>(FacialValidationStatus.Approved, data);
+            SetupSender<ValidateIdentityV2Cmd>(FacialValidationStatus.Approved);
 
             var result = await Facephi.ValidateIdentityV2(
                 new ValidateIdentityV2Cmd(), _senderMock.Object, CancellationToken.None);
 
-            var json = result as JsonHttpResult<PassiveLivenessResult>;
+            var ok = result as Ok<ValidateBiometricResponse>;
 
             Assert.Multiple(() =>
             {
-                Assert.That(json, Is.Not.Null, "Se esperaba un JsonHttpResult<PassiveLivenessResult>.");
-                Assert.That(json!.StatusCode, Is.EqualTo(StatusCodes.Status200OK));
-                Assert.That(json.Value, Is.SameAs(data),
-                    "El cuerpo debe ser la respuesta de Facephi sin modificar.");
+                Assert.That(ok, Is.Not.Null, "Se esperaba un Ok<ValidateBiometricResponse>.");
+                Assert.That(ok!.StatusCode, Is.EqualTo(StatusCodes.Status200OK));
+                Assert.That(ok.Value!.IsValid, Is.True);
             });
         }
 
         [Test]
-        public async Task ValidateIdentityV2_Returns422_WhenRejected()
+        public async Task ValidateIdentityV2_ReturnsIsValidFalse_WhenRejected()
         {
-            var data = BuildFacephiResult();
-            SetupSender<ValidateIdentityV2Cmd>(FacialValidationStatus.Rejected, data);
+            SetupSender<ValidateIdentityV2Cmd>(FacialValidationStatus.Rejected);
 
             var result = await Facephi.ValidateIdentityV2(
                 new ValidateIdentityV2Cmd(), _senderMock.Object, CancellationToken.None);
 
-            var json = result as JsonHttpResult<PassiveLivenessResult>;
+            var ok = result as Ok<ValidateBiometricResponse>;
 
             Assert.Multiple(() =>
             {
-                Assert.That(json, Is.Not.Null);
-                Assert.That(json!.StatusCode, Is.EqualTo(StatusCodes.Status422UnprocessableEntity));
-                Assert.That(json.Value, Is.SameAs(data));
+                // Un rechazo biométrico no es un error: responde 200 con isValid false.
+                Assert.That(ok, Is.Not.Null);
+                Assert.That(ok!.StatusCode, Is.EqualTo(StatusCodes.Status200OK));
+                Assert.That(ok.Value!.IsValid, Is.False);
+            });
+        }
+
+        [Test]
+        public async Task ValidateIdentityV2_NeverExposesTheFacephiCodes()
+        {
+            SetupSender<ValidateIdentityV2Cmd>(FacialValidationStatus.Approved);
+
+            var result = await Facephi.ValidateIdentityV2(
+                new ValidateIdentityV2Cmd(), _senderMock.Object, CancellationToken.None);
+
+            var ok = result as Ok<ValidateBiometricResponse>;
+            var serialized = System.Text.Json.JsonSerializer.Serialize(ok!.Value);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(serialized, Does.Not.Contain("facialAuthentication"));
+                Assert.That(serialized, Does.Not.Contain("passiveLiveness"));
+                Assert.That(serialized, Does.Not.Contain("serviceTransactionId"));
             });
         }
 
         [Test]
         public async Task ValidateIdentityV2_SendsTheCommandThroughMediatR()
         {
-            SetupSender<ValidateIdentityV2Cmd>(FacialValidationStatus.Approved, BuildFacephiResult());
+            SetupSender<ValidateIdentityV2Cmd>(FacialValidationStatus.Approved);
 
             var command = new ValidateIdentityV2Cmd { IdT24 = "123456789" };
 
@@ -116,49 +129,40 @@ namespace onboarding_micro_person.Tests.UnitTests.Endpoints
         // ────────────────── POST /api/v1/facephi/validate-face ───────────────────
 
         [Test]
-        public async Task ValidateFaceOnly_Returns200_WhenApproved()
+        public async Task ValidateFaceOnly_ReturnsIsValidTrue_WhenApproved()
         {
-            var data = BuildFacephiResult();
-            SetupSender<ValidateFaceOnlyCmd>(FacialValidationStatus.Approved, data);
+            SetupSender<ValidateFaceOnlyCmd>(FacialValidationStatus.Approved);
 
             var result = await Facephi.ValidateFaceOnly(
                 new ValidateFaceOnlyCmd(), _senderMock.Object, CancellationToken.None);
 
-            var json = result as JsonHttpResult<PassiveLivenessResult>;
+            var ok = result as Ok<ValidateBiometricResponse>;
 
             Assert.Multiple(() =>
             {
-                Assert.That(json, Is.Not.Null,
-                    "validate-face debe responder igual que validate: JsonHttpResult, " +
-                    "no Results.Ok con el objeto completo.");
-                Assert.That(json!.StatusCode, Is.EqualTo(StatusCodes.Status200OK));
-                Assert.That(json.Value, Is.SameAs(data));
+                Assert.That(ok, Is.Not.Null);
+                Assert.That(ok!.StatusCode, Is.EqualTo(StatusCodes.Status200OK));
+                Assert.That(ok.Value!.IsValid, Is.True);
             });
         }
 
         [Test]
-        public async Task ValidateFaceOnly_Returns422_WhenRejected()
+        public async Task ValidateFaceOnly_ReturnsIsValidFalse_WhenRejected()
         {
-            var data = BuildFacephiResult();
-            SetupSender<ValidateFaceOnlyCmd>(FacialValidationStatus.Rejected, data);
+            SetupSender<ValidateFaceOnlyCmd>(FacialValidationStatus.Rejected);
 
             var result = await Facephi.ValidateFaceOnly(
                 new ValidateFaceOnlyCmd(), _senderMock.Object, CancellationToken.None);
 
-            var json = result as JsonHttpResult<PassiveLivenessResult>;
+            var ok = result as Ok<ValidateBiometricResponse>;
 
-            Assert.Multiple(() =>
-            {
-                Assert.That(json, Is.Not.Null);
-                Assert.That(json!.StatusCode, Is.EqualTo(StatusCodes.Status422UnprocessableEntity));
-                Assert.That(json.Value, Is.SameAs(data));
-            });
+            Assert.That(ok!.Value!.IsValid, Is.False);
         }
 
         [Test]
         public async Task ValidateFaceOnly_SendsTheCommandThroughMediatR()
         {
-            SetupSender<ValidateFaceOnlyCmd>(FacialValidationStatus.Approved, BuildFacephiResult());
+            SetupSender<ValidateFaceOnlyCmd>(FacialValidationStatus.Approved);
 
             var command = new ValidateFaceOnlyCmd { IdT24 = "123456789" };
 
@@ -171,16 +175,16 @@ namespace onboarding_micro_person.Tests.UnitTests.Endpoints
         [Test]
         public async Task BothValidationEndpoints_ReturnTheSameShape()
         {
-            // Si estos dos divergen, el front tiene que parsear dos formatos distintos.
-            var data = BuildFacephiResult();
-
+            // Si divergen, el consumidor tiene que parsear dos formatos distintos.
             _senderMock
                 .Setup(x => x.Send(It.IsAny<ValidateIdentityV2Cmd>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new ValidateIdentityV2Result(FacialValidationStatus.Approved, data));
+                .ReturnsAsync(new ValidateIdentityV2Result(
+                    FacialValidationStatus.Approved, BuildFacephiResult()));
 
             _senderMock
                 .Setup(x => x.Send(It.IsAny<ValidateFaceOnlyCmd>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new ValidateIdentityV2Result(FacialValidationStatus.Approved, data));
+                .ReturnsAsync(new ValidateIdentityV2Result(
+                    FacialValidationStatus.Approved, BuildFacephiResult()));
 
             var full = await Facephi.ValidateIdentityV2(
                 new ValidateIdentityV2Cmd(), _senderMock.Object, CancellationToken.None);
@@ -191,7 +195,7 @@ namespace onboarding_micro_person.Tests.UnitTests.Endpoints
             Assert.That(faceOnly.GetType(), Is.EqualTo(full.GetType()));
         }
 
-        // ──────────────── GET /api/v1/facephi/document/{idT24} ───────────────────
+        // ──────────────── Consulta de documento almacenado ───────────────────────
 
         [Test]
         public async Task GetDocument_DelegatesToMediatRAndReturnsOk()
@@ -220,7 +224,7 @@ namespace onboarding_micro_person.Tests.UnitTests.Endpoints
         }
 
         [Test]
-        public async Task GetDocument_PassesTheRouteIdT24ToTheQuery()
+        public async Task GetDocument_PassesTheIdT24ToTheQuery()
         {
             _senderMock
                 .Setup(x => x.Send(It.IsAny<GetFacePhiDocumentQry>(), It.IsAny<CancellationToken>()))

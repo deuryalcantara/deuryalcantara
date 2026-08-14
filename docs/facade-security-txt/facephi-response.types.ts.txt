@@ -8,24 +8,10 @@ export const FacephiBackendUrls = {
 } as const;
 
 /**
- * Respuesta cruda del microservicio (Facephi Identity Validation V2).
- * Uso interno del service: no se expone al consumidor del facade.
- */
-export interface FacephiIdentityValidationResponse {
-  serviceTransactionId: string;
-  serviceResultCode: number;
-  serviceResultLog: string;
-  serviceTime: string;
-  facialAuthenticationResult: number;
-  facialAuthenticationLog: string;
-  facialAuthenticationSimilarity: number;
-  passiveLivenessResult: number;
-  passiveLivenessLog: string;
-}
-
-/**
- * Respuesta pública del facade: sólo indica si la validación biométrica pasó.
- * El detalle de los códigos de Facephi queda en los logs del microservicio.
+ * Respuesta de los endpoints de validación biométrica.
+ *
+ * El microservicio ya interpreta los códigos de Facephi y devuelve el
+ * veredicto: el facade no evalúa nada, sólo reenvía.
  */
 export interface ValidateBiometricResponse {
   isValid: boolean;
