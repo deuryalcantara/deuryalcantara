@@ -1,5 +1,3 @@
-// src/facephi/facephi.controller.spec.ts
-
 import { Test, TestingModule } from '@nestjs/testing';
 
 import { DocumentType } from './enums/document-type.enum';
@@ -10,7 +8,7 @@ describe('FacephiController', () => {
   let controller: FacephiController;
   let service: FacephiService;
 
-  const headers = { 'x-api-key': 'key' };
+  const headers = { requestid: 'req-1' };
 
   const validationResponse = {
     serviceTransactionId: '2db602ee-3564-4304-af95-92a52eaae12d',

@@ -1,5 +1,3 @@
-// src/facephi/facephi.service.spec.ts
-
 import { Logger } from '@common/logger/services/logger/logger.service';
 import { HttpService } from '@nestjs/axios';
 import { HttpException, InternalServerErrorException } from '@nestjs/common';
@@ -27,7 +25,7 @@ describe('FacephiService', () => {
     },
   };
 
-  const headers = { 'x-api-key': 'key', requestid: 'req-1' };
+  const headers = { requestid: 'req-1' };
 
   const approvedResponse = {
     serviceTransactionId: '2db602ee-3564-4304-af95-92a52eaae12d',
@@ -83,7 +81,7 @@ describe('FacephiService', () => {
   });
 
   describe('validateBiometric', () => {
-    it('should call post with the correct url, payload and headers', async () => {
+    it('should call post with the correct url and payload', async () => {
       (httpService.axiosRef.post as jest.Mock).mockResolvedValue({
         data: approvedResponse,
       });
@@ -100,7 +98,6 @@ describe('FacephiService', () => {
         expect.objectContaining({
           headers: expect.objectContaining({
             'Content-Type': 'application/json',
-            'X-API-Key': 'key',
             requestId: 'req-1',
           }),
         }),
@@ -114,7 +111,6 @@ describe('FacephiService', () => {
 
       const arrayHeaders = {
         requestid: ['req-first', 'req-second'],
-        'x-api-key': ['key-first', 'key-second'],
         authorization: ['Bearer first', 'Bearer second'],
         app_version: ['2.1.0', '2.0.0'],
         device: ['ios', 'android'],
@@ -127,18 +123,17 @@ describe('FacephiService', () => {
       expect(httpService.axiosRef.post).toHaveBeenCalledWith(
         `${baseUrl}/api/v1/facephi/validate`,
         payload,
-        {
+        expect.objectContaining({
           headers: expect.objectContaining({
             'Content-Type': 'application/json',
             requestId: 'req-first',
-            'X-API-Key': 'key-first',
             Authorization: 'Bearer first',
             app_version: '2.1.0',
             device: 'ios',
             user: 'user-a',
             devicetoken: 'token-a',
           }),
-        },
+        }),
       );
     });
 
@@ -160,7 +155,6 @@ describe('FacephiService', () => {
         service.validateBiometric(payload as any, headers as any),
       ).rejects.toMatchObject({ status: 422 });
 
-      // Un rechazo biometrico es un resultado de negocio, no una falla.
       expect(logger.error).not.toHaveBeenCalled();
     });
 
@@ -189,7 +183,7 @@ describe('FacephiService', () => {
     });
 
     it('should throw InternalServerError when the base url is not configured', async () => {
-      const module = await Test.createTestingModule({
+      const module: TestingModule = await Test.createTestingModule({
         providers: [
           FacephiService,
           {
