@@ -73,13 +73,14 @@ describe('FacephiController', () => {
     expect(service.validateFaceOnly).toHaveBeenCalledWith(dto, headers);
   });
 
-  it('should call service.getDocumentByIdT24', async () => {
+  it('should call service.getDocumentByIdT24 with the idT24 from the body', async () => {
     const response = { hasDocument: true, documentType: 'CED' };
+    const dto = { idT24: '123456789' };
 
     (service.getDocumentByIdT24 as jest.Mock).mockResolvedValue(response);
 
     expect(
-      await controller.getDocumentByIdT24('123456789', headers as any),
+      await controller.getFacephiDocument(dto as any, headers as any),
     ).toEqual(response);
 
     expect(service.getDocumentByIdT24).toHaveBeenCalledWith(

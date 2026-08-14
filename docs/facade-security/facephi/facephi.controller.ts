@@ -1,16 +1,15 @@
 import {
   Body,
   Controller,
-  Get,
   Headers,
   HttpCode,
   HttpStatus,
-  Param,
   Post,
 } from '@nestjs/common';
 import { ApiHeader, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { RequestHeaders } from 'src/modules/softtoken/types/softtoken-response.types';
+import { GetFacephiDocumentDto } from './dto/get-facephi-document.dto';
 import { ValidateBiometricDto } from './dto/validate-biometric.dto';
 import { ValidateFaceOnlyDto } from './dto/validate-face-only.dto';
 import { FacephiService } from './facephi.service';
@@ -78,11 +77,16 @@ export class FacephiController {
     description:
       'Indica si el cliente puede validar solo con la captura facial',
   })
-  @Get('document/:idT24')
-  getDocumentByIdT24(
-    @Param('idT24') idT24: string,
+  @ApiResponse({ status: 400, description: 'Datos de entrada invalidos' })
+  @HttpCode(HttpStatus.OK)
+  @Post('document')
+  getFacephiDocument(
+    @Body() getFacephiDocumentDto: GetFacephiDocumentDto,
     @Headers() headers: RequestHeaders,
   ): Promise<FacephiDocumentResponse> {
-    return this.facephiService.getDocumentByIdT24(idT24, headers);
+    return this.facephiService.getDocumentByIdT24(
+      getFacephiDocumentDto.idT24,
+      headers,
+    );
   }
 }
