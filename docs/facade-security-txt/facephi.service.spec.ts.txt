@@ -39,6 +39,13 @@ describe('FacephiService', () => {
     passiveLivenessLog: 'Live',
   };
 
+  const rejectedResponse = {
+    ...approvedResponse,
+    facialAuthenticationResult: 1,
+    facialAuthenticationLog: 'Negative',
+    passiveLivenessResult: 17,
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -81,7 +88,7 @@ describe('FacephiService', () => {
   });
 
   describe('validateBiometric', () => {
-    it('should call post with the correct url and payload', async () => {
+    it('should return isValid true when downstream approves', async () => {
       (httpService.axiosRef.post as jest.Mock).mockResolvedValue({
         data: approvedResponse,
       });
@@ -91,7 +98,45 @@ describe('FacephiService', () => {
         headers as any,
       );
 
-      expect(result).toEqual(approvedResponse);
+      expect(result).toEqual({ isValid: true });
+    });
+
+    it('should return isValid false when downstream responds 422', async () => {
+      (httpService.axiosRef.post as jest.Mock).mockRejectedValue({
+        isAxiosError: true,
+        message: 'Request failed with status code 422',
+        response: { status: 422, data: rejectedResponse },
+      });
+
+      const result = await service.validateBiometric(
+        payload as any,
+        headers as any,
+      );
+
+      expect(result).toEqual({ isValid: false });
+      expect(logger.error).not.toHaveBeenCalled();
+    });
+
+    it('should not expose the facephi codes to the consumer', async () => {
+      (httpService.axiosRef.post as jest.Mock).mockResolvedValue({
+        data: approvedResponse,
+      });
+
+      const result = await service.validateBiometric(
+        payload as any,
+        headers as any,
+      );
+
+      expect(Object.keys(result)).toEqual(['isValid']);
+    });
+
+    it('should call post with the correct url and payload', async () => {
+      (httpService.axiosRef.post as jest.Mock).mockResolvedValue({
+        data: approvedResponse,
+      });
+
+      await service.validateBiometric(payload as any, headers as any);
+
       expect(httpService.axiosRef.post).toHaveBeenCalledWith(
         `${baseUrl}/api/v1/facephi/validate`,
         payload,
@@ -137,28 +182,7 @@ describe('FacephiService', () => {
       );
     });
 
-    it('should propagate a 422 from downstream without logging it as an error', async () => {
-      const rejectedResponse = {
-        ...approvedResponse,
-        facialAuthenticationResult: 1,
-        facialAuthenticationLog: 'Negative',
-        passiveLivenessResult: 17,
-      };
-
-      (httpService.axiosRef.post as jest.Mock).mockRejectedValue({
-        isAxiosError: true,
-        message: 'Request failed with status code 422',
-        response: { status: 422, data: rejectedResponse },
-      });
-
-      await expect(
-        service.validateBiometric(payload as any, headers as any),
-      ).rejects.toMatchObject({ status: 422 });
-
-      expect(logger.error).not.toHaveBeenCalled();
-    });
-
-    it('should propagate the downstream status when it fails', async () => {
+    it('should propagate a 502 from downstream', async () => {
       (httpService.axiosRef.post as jest.Mock).mockRejectedValue({
         isAxiosError: true,
         message: 'Request failed with status code 502',
@@ -210,7 +234,7 @@ describe('FacephiService', () => {
   });
 
   describe('validateFaceOnly', () => {
-    it('should call the validate-face endpoint', async () => {
+    it('should call the validate-face endpoint and return isValid true', async () => {
       (httpService.axiosRef.post as jest.Mock).mockResolvedValue({
         data: approvedResponse,
       });
@@ -225,7 +249,7 @@ describe('FacephiService', () => {
         headers as any,
       );
 
-      expect(result).toEqual(approvedResponse);
+      expect(result).toEqual({ isValid: true });
       expect(httpService.axiosRef.post).toHaveBeenCalledWith(
         `${baseUrl}/api/v1/facephi/validate-face`,
         faceOnlyPayload,
@@ -233,7 +257,23 @@ describe('FacephiService', () => {
       );
     });
 
+    it('should return isValid false when downstream responds 422', async () => {
+      (httpService.axiosRef.post as jest.Mock).mockRejectedValue({
+        isAxiosError: true,
+        message: 'Request failed with status code 422',
+        response: { status: 422, data: rejectedResponse },
+      });
+
+      const result = await service.validateFaceOnly(
+        { idT24: '1', bestImageToken: 'y' } as any,
+        headers as any,
+      );
+
+      expect(result).toEqual({ isValid: false });
+    });
+
     it('should propagate a 404 when the customer has no stored document', async () => {
+      // Un 404 no es "no aprobado": es que no hay documento contra el cual validar.
       (httpService.axiosRef.post as jest.Mock).mockRejectedValue({
         isAxiosError: true,
         message: 'Request failed with status code 404',

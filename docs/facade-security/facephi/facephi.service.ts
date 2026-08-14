@@ -1,5 +1,3 @@
-// src/facephi/facephi.service.ts
-
 import { Logger } from '@common/logger/services/logger/logger.service';
 import { HttpService } from '@nestjs/axios';
 import {
@@ -19,7 +17,8 @@ import { ValidateFaceOnlyDto } from './dto/validate-face-only.dto';
 import {
   FacephiBackendUrls,
   FacephiDocumentResponse,
-  FacephiValidationResponse,
+  FacephiIdentityValidationResponse,
+  ValidateBiometricResponse,
 } from './types/facephi-response.types';
 
 const SERVICE_NAME = 'FacephiService';
@@ -34,14 +33,12 @@ export class FacephiService {
 
   /**
    * Valida la fotografía del documento contra la captura facial del cliente.
-   * El microservicio responde 200 si aprueba y 422 si no; ese estado se
-   * propaga tal cual al consumidor.
    */
   async validateBiometric(
     payload: ValidateBiometricDto,
     headers: RequestHeaders,
-  ): Promise<FacephiValidationResponse> {
-    return this.post<ValidateBiometricDto, FacephiValidationResponse>(
+  ): Promise<ValidateBiometricResponse> {
+    return this.validate<ValidateBiometricDto>(
       FacephiBackendUrls.validateBiometric,
       payload,
       headers,
@@ -56,8 +53,8 @@ export class FacephiService {
   async validateFaceOnly(
     payload: ValidateFaceOnlyDto,
     headers: RequestHeaders,
-  ): Promise<FacephiValidationResponse> {
-    return this.post<ValidateFaceOnlyDto, FacephiValidationResponse>(
+  ): Promise<ValidateBiometricResponse> {
+    return this.validate<ValidateFaceOnlyDto>(
       FacephiBackendUrls.validateFaceOnly,
       payload,
       headers,
@@ -97,6 +94,40 @@ export class FacephiService {
       return data;
     } catch (error) {
       this.handleUpstreamError(error, methodName, requestId, path);
+    }
+  }
+
+  /**
+   * El microservicio responde 200 cuando aprueba y 422 cuando no. El facade
+   * traduce eso a un booleano: el 422 no es un error para el consumidor, es
+   * el resultado de la validación.
+   *
+   * Cualquier otro estado (404, 502, 504) sigue propagándose como error.
+   */
+  private async validate<TPayload>(
+    path: string,
+    payload: TPayload,
+    headers: RequestHeaders,
+    methodName: string,
+  ): Promise<ValidateBiometricResponse> {
+    try {
+      await this.post<TPayload, FacephiIdentityValidationResponse>(
+        path,
+        payload,
+        headers,
+        methodName,
+      );
+
+      return { isValid: true };
+    } catch (error) {
+      if (
+        error instanceof HttpException &&
+        error.getStatus() === HttpStatus.UNPROCESSABLE_ENTITY
+      ) {
+        return { isValid: false };
+      }
+
+      throw error;
     }
   }
 
@@ -144,9 +175,9 @@ export class FacephiService {
         message: `No fue posible completar la operacion en ${path}`,
       };
 
-      // Un 422 no es un fallo de integración: es el resultado de negocio de
-      // una validación biométrica no aprobada. Se propaga igual, pero no se
-      // registra como error para no ensuciar las alertas.
+      // Un 422 no es un fallo de integración: es una validación biométrica no
+      // aprobada. Se registra como información y el metodo validate lo
+      // convierte en isValid = false.
       if (status === HttpStatus.UNPROCESSABLE_ENTITY) {
         this.logger.log(`Validacion biometrica no aprobada en ${path}`, {
           requestId: requestId || undefined,

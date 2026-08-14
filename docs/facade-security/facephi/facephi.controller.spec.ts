@@ -10,17 +10,7 @@ describe('FacephiController', () => {
 
   const headers = { requestid: 'req-1' };
 
-  const validationResponse = {
-    serviceTransactionId: '2db602ee-3564-4304-af95-92a52eaae12d',
-    serviceResultCode: 0,
-    serviceResultLog: '[identity] Service executed ok',
-    serviceTime: '2235',
-    facialAuthenticationResult: 3,
-    facialAuthenticationLog: 'Positive',
-    facialAuthenticationSimilarity: 0.99214232,
-    passiveLivenessResult: 3,
-    passiveLivenessLog: 'Live',
-  };
+  const validationResponse = { isValid: true };
 
   beforeEach(async () => {
     const mockService = {
