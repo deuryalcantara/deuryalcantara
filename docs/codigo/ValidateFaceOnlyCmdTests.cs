@@ -1,7 +1,15 @@
 // Ruta destino:
 // tests/UnitTests/Application/Facephi/ValidateFaceOnlyCmdTests.cs
 //
-// Ajusta el using de NotFoundException al namespace real del micro.
+// SUPOSICIONES A VERIFICAR SI ALGO NO COMPILA:
+//
+// 1. ValidateFaceOnlyCmdHandler recibe, en este orden: IFacePhiService,
+//    IFacePhiBiometricRepository, IIdentityValidationEvaluator,
+//    IOptions<AppSettings>, ILogger<...>.
+//    Si mantuviste tu versión de 3 parámetros (sin settings ni logger),
+//    ajusta BuildHandler y elimina los tests del toggle.
+// 2. NotFoundException existe en Common.Exceptions. Ajusta el using si no.
+// 3. El record ValidateIdentityV2Result expone Status y Data.
 
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -25,6 +33,12 @@ namespace onboarding_micro_person.Tests.UnitTests.Application.Facephi
         private const int FacialPositive = 3;
         private const int FacialNegative = 1;
         private const int FacialNone = 0;
+
+        private const int LivenessLive = 3;
+        private const int LivenessNoLive = 17;
+        private const int LivenessNone = 0;
+        private const int LivenessEyesClosed = 18;
+
         private const int StoredMethod = 5;
 
         private Mock<IFacePhiService> _facePhiMock = default!;
@@ -39,20 +53,12 @@ namespace onboarding_micro_person.Tests.UnitTests.Application.Facephi
             _repositoryMock = new Mock<IFacePhiBiometricRepository>();
             _evaluatorMock = new Mock<IIdentityValidationEvaluator>();
 
-            _settings = new AppSettings
-            {
-                FACIAL_VALIDATION_CUSTOM_LIVENESS_CHECK = false
-            };
+            _settings = new AppSettings();
+            _settings.FACIAL_VALIDATION_CUSTOM_LIVENESS_CHECK = false;
 
             _evaluatorMock
                 .Setup(x => x.MeetsSimilarityThreshold(It.IsAny<double>()))
                 .Returns(true);
-
-            _facePhiMock
-                .Setup(x => x.FinishTrackingAsync(
-                    It.IsAny<bool>(), It.IsAny<string>(),
-                    It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-                .Returns(Task.CompletedTask);
         }
 
         private ValidateFaceOnlyCmdHandler BuildHandler() => new(
@@ -76,7 +82,7 @@ namespace onboarding_micro_person.Tests.UnitTests.Application.Facephi
             OperationId = Guid.NewGuid().ToString()
         };
 
-        private void SetupStoredDocument(string? token1 = "stored-document-token")
+        private void SetupStoredDocument(string token1 = "stored-document-token")
         {
             _repositoryMock
                 .Setup(x => x.GetByIdT24Async(It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -84,16 +90,23 @@ namespace onboarding_micro_person.Tests.UnitTests.Application.Facephi
                 {
                     IdT24 = "123456789",
                     DocumentType = "CED",
-                    Token1 = token1!,
+                    Token1 = token1,
                     Token2 = "stored-best-image",
                     Method = StoredMethod
                 });
         }
 
+        private void SetupNoStoredDocument()
+        {
+            _repositoryMock
+                .Setup(x => x.GetByIdT24Async(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((FacePhiBiometricDocument)null!);
+        }
+
         private void SetupFacePhi(
             int serviceResultCode = 0,
             int facialResult = FacialPositive,
-            FacephiLivenessResult liveness = FacephiLivenessResult.Live,
+            int livenessResult = LivenessLive,
             double similarity = 0.9921)
         {
             _facePhiMock
@@ -105,7 +118,7 @@ namespace onboarding_micro_person.Tests.UnitTests.Application.Facephi
                     ServiceResultCode = serviceResultCode,
                     facialAuthenticationResult = facialResult,
                     facialAuthenticationSimilarity = similarity,
-                    passiveLivenessResult = liveness
+                    passiveLivenessResult = (FacephiLivenessResult)livenessResult
                 });
         }
 
@@ -168,9 +181,7 @@ namespace onboarding_micro_person.Tests.UnitTests.Application.Facephi
         [Test]
         public void Handler_Throws_WhenTheCustomerHasNoDocument()
         {
-            _repositoryMock
-                .Setup(x => x.GetByIdT24Async(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync((FacePhiBiometricDocument?)null);
+            SetupNoStoredDocument();
 
             Assert.ThrowsAsync<NotFoundException>(
                 () => BuildHandler().Handle(BuildCommand(), CancellationToken.None));
@@ -190,9 +201,7 @@ namespace onboarding_micro_person.Tests.UnitTests.Application.Facephi
         [Test]
         public void Handler_DoesNotCallFacephi_WhenThereIsNoDocument()
         {
-            _repositoryMock
-                .Setup(x => x.GetByIdT24Async(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync((FacePhiBiometricDocument?)null);
+            SetupNoStoredDocument();
 
             Assert.ThrowsAsync<NotFoundException>(
                 () => BuildHandler().Handle(BuildCommand(), CancellationToken.None));
@@ -261,18 +270,18 @@ namespace onboarding_micro_person.Tests.UnitTests.Application.Facephi
 
         // ─────────────────────────────── Veredicto ───────────────────────────────
 
-        [TestCase(FacialPositive, FacephiLivenessResult.Live, FacialValidationStatus.Approved)]
-        [TestCase(FacialNegative, FacephiLivenessResult.Live, FacialValidationStatus.Rejected)]
-        [TestCase(FacialNone, FacephiLivenessResult.Live, FacialValidationStatus.Rejected)]
-        [TestCase(FacialPositive, FacephiLivenessResult.NoLive, FacialValidationStatus.Rejected)]
-        [TestCase(FacialPositive, FacephiLivenessResult.None, FacialValidationStatus.Rejected)]
-        [TestCase(FacialPositive, FacephiLivenessResult.NoneBecauseEyesClosed, FacialValidationStatus.Rejected)]
+        [TestCase(FacialPositive, LivenessLive, FacialValidationStatus.Approved)]
+        [TestCase(FacialNegative, LivenessLive, FacialValidationStatus.Rejected)]
+        [TestCase(FacialNone, LivenessLive, FacialValidationStatus.Rejected)]
+        [TestCase(FacialPositive, LivenessNoLive, FacialValidationStatus.Rejected)]
+        [TestCase(FacialPositive, LivenessNone, FacialValidationStatus.Rejected)]
+        [TestCase(FacialPositive, LivenessEyesClosed, FacialValidationStatus.Rejected)]
         public async Task Handler_TrustsFacephiVerdict_WhenCustomCheckIsDisabled(
-            int facialResult, FacephiLivenessResult liveness, FacialValidationStatus expected)
+            int facialResult, int livenessResult, FacialValidationStatus expected)
         {
             _settings.FACIAL_VALIDATION_CUSTOM_LIVENESS_CHECK = false;
             SetupStoredDocument();
-            SetupFacePhi(facialResult: facialResult, liveness: liveness);
+            SetupFacePhi(facialResult: facialResult, livenessResult: livenessResult);
 
             var result = await BuildHandler().Handle(BuildCommand(), CancellationToken.None);
 
@@ -282,13 +291,13 @@ namespace onboarding_micro_person.Tests.UnitTests.Application.Facephi
         [Test]
         public async Task Handler_Rejects_WhenSubjectIsNotAlive_EvenIfThresholdIsMet()
         {
-            // Este es el control clave de este endpoint: el cliente ya no presenta
-            // el documento físico, así que la prueba de vida no es opcional.
+            // Control clave de este endpoint: el cliente ya no presenta el
+            // documento físico, así que la prueba de vida no es opcional.
             _settings.FACIAL_VALIDATION_CUSTOM_LIVENESS_CHECK = true;
             _evaluatorMock.Setup(x => x.MeetsSimilarityThreshold(It.IsAny<double>())).Returns(true);
 
             SetupStoredDocument();
-            SetupFacePhi(liveness: FacephiLivenessResult.NoLive, similarity: 0.99);
+            SetupFacePhi(livenessResult: LivenessNoLive, similarity: 0.99);
 
             var result = await BuildHandler().Handle(BuildCommand(), CancellationToken.None);
 
@@ -394,7 +403,7 @@ namespace onboarding_micro_person.Tests.UnitTests.Application.Facephi
         public async Task Handler_DoesNotPersistAnything()
         {
             // Face-only reutiliza el documento existente: no lo modifica.
-            // Si se decide dejar rastro de estas validaciones, este test debe cambiar.
+            // Si se decide dejar rastro de estas validaciones, este test cambia.
             SetupStoredDocument();
             SetupFacePhi();
 

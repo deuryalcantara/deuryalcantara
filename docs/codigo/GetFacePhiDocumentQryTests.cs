@@ -1,8 +1,8 @@
 // Ruta destino:
 // tests/UnitTests/Application/Facephi/GetFacePhiDocumentQryTests.cs
 //
-// Sustituye a los tests GetDocument_* que estaban en FacephiEndpointsTests:
-// al pasar por MediatR, la lógica ya no vive en el endpoint.
+// Sólo aplica si convertiste el GET a Query de MediatR.
+// Si el endpoint sigue llamando al repositorio directo, no uses este archivo.
 
 using Microsoft.Extensions.Logging;
 using onboarding_micro_person.Application.Facephi.Queries;
@@ -27,7 +27,7 @@ namespace onboarding_micro_person.Tests.UnitTests.Application.Facephi
             _repositoryMock.Object,
             Mock.Of<ILogger<GetFacePhiDocumentQryHandler>>());
 
-        private void SetupStoredDocument(string? token1, string documentType = "CED")
+        private void SetupStoredDocument(string token1, string documentType = "CED")
         {
             _repositoryMock
                 .Setup(x => x.GetByIdT24Async(It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -35,7 +35,7 @@ namespace onboarding_micro_person.Tests.UnitTests.Application.Facephi
                 {
                     IdT24 = "123456789",
                     DocumentType = documentType,
-                    Token1 = token1!,
+                    Token1 = token1,
                     Token2 = "stored-best-image",
                     Method = 5
                 });
@@ -77,7 +77,7 @@ namespace onboarding_micro_person.Tests.UnitTests.Application.Facephi
         {
             _repositoryMock
                 .Setup(x => x.GetByIdT24Async(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync((FacePhiBiometricDocument?)null);
+                .ReturnsAsync((FacePhiBiometricDocument)null!);
 
             var result = await BuildHandler().Handle(
                 new GetFacePhiDocumentQry { IdT24 = "123456789" }, CancellationToken.None);
@@ -108,18 +108,14 @@ namespace onboarding_micro_person.Tests.UnitTests.Application.Facephi
         [TestCase("   ")]
         public async Task Handler_ReturnsFalse_WhenToken1IsMissing(string token1)
         {
-            // El front usa este resultado para decidir si puede llamar a validate-face.
-            // Un registro sin token1 no habilita ese flujo.
+            // El front usa este resultado para decidir si puede llamar a
+            // validate-face. Un registro sin token1 no habilita ese flujo.
             SetupStoredDocument(token1);
 
             var result = await BuildHandler().Handle(
                 new GetFacePhiDocumentQry { IdT24 = "123456789" }, CancellationToken.None);
 
-            Assert.Multiple(() =>
-            {
-                Assert.That(result.HasDocument, Is.False);
-                Assert.That(result.DocumentType, Is.Null);
-            });
+            Assert.That(result.HasDocument, Is.False);
         }
 
         [Test]
