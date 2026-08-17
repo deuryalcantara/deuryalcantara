@@ -73,6 +73,21 @@ describe('FacephiController', () => {
     expect(service.validateFaceOnly).toHaveBeenCalledWith(dto, headers);
   });
 
+  it('should call service.getDocumentByIdT24 with the idT24 from the route', async () => {
+    const response = { hasDocument: true, documentType: 'CED' };
+
+    (service.getDocumentByIdT24 as jest.Mock).mockResolvedValue(response);
+
+    expect(
+      await controller.getFacephiDocumentByIdT24('123456789', headers as any),
+    ).toEqual(response);
+
+    expect(service.getDocumentByIdT24).toHaveBeenCalledWith(
+      '123456789',
+      headers,
+    );
+  });
+
   it('should call service.getDocumentByIdT24 with the idT24 from the body', async () => {
     const response = { hasDocument: true, documentType: 'CED' };
     const dto = { idT24: '123456789' };
@@ -87,5 +102,25 @@ describe('FacephiController', () => {
       '123456789',
       headers,
     );
+  });
+
+  it('should resolve the same response through both verbs', async () => {
+    // El POST es temporal: mientras exista, debe devolver exactamente lo mismo
+    // que el GET. Si divergen, la app veria comportamientos distintos.
+    const response = { hasDocument: true, documentType: 'CED' };
+
+    (service.getDocumentByIdT24 as jest.Mock).mockResolvedValue(response);
+
+    const fromGet = await controller.getFacephiDocumentByIdT24(
+      '123456789',
+      headers as any,
+    );
+
+    const fromPost = await controller.getFacephiDocument(
+      { idT24: '123456789' } as any,
+      headers as any,
+    );
+
+    expect(fromPost).toEqual(fromGet);
   });
 });

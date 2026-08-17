@@ -1,9 +1,11 @@
 import {
   Body,
   Controller,
+  Get,
   Headers,
   HttpCode,
   HttpStatus,
+  Param,
   Post,
 } from '@nestjs/common';
 import { ApiHeader, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
@@ -71,6 +73,35 @@ export class FacephiController {
   @ApiHeader({ name: 'X-API-Key', required: true })
   @ApiOperation({
     summary: 'Consulta si el cliente ya tiene documento biometrico almacenado',
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Indica si el cliente puede validar solo con la captura facial',
+  })
+  @ApiResponse({ status: 400, description: 'Datos de entrada invalidos' })
+  @Get('document/:idT24')
+  getFacephiDocumentByIdT24(
+    @Param('idT24') idT24: string,
+    @Headers() headers: RequestHeaders,
+  ): Promise<FacephiDocumentResponse> {
+    return this.facephiService.getDocumentByIdT24(idT24, headers);
+  }
+
+  /**
+   * TEMPORAL — misma consulta que el GET de arriba, pero recibiendo el idT24
+   * en el cuerpo.
+   *
+   * Existe porque el middleware de cifrado no opera sobre peticiones sin
+   * cuerpo, así que la app no puede consumir el GET. Se retira en cuanto el
+   * GET quede operativo; hasta entonces los dos delegan en el mismo metodo
+   * del service, sin duplicar logica.
+   */
+  @ApiHeader({ name: 'X-API-Key', required: true })
+  @ApiOperation({
+    summary: 'TEMPORAL: consulta de documento almacenado por POST',
+    description:
+      'Alternativa al GET mientras la app no pueda consumirlo por el cifrado. Se retirara cuando el GET quede operativo.',
   })
   @ApiResponse({
     status: 200,
