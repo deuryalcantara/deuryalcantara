@@ -1,0 +1,161 @@
+═══════════════════════════════════════════════════════════════════════════════
+ VERSIÓN MÍNIMA · Registros, configuración, mapeo del 423 e índice
+═══════════════════════════════════════════════════════════════════════════════
+
+
+1. Program.cs / DependencyInjection.cs
+───────────────────────────────────────────────────────────────────────────────
+Sólo se añaden líneas. No se reemplaza nada. No se toca el pipeline de MediatR.
+
+    // El servicio lee el requestId de la cabecera para la trazabilidad de auditoría.
+    builder.Services.AddHttpContextAccessor();
+
+    builder.Services.AddScoped<IFacePhiAttemptControlRepository, FacePhiAttemptControlRepository>();
+    builder.Services.AddScoped<IBiometricAttemptControlService, BiometricAttemptControlService>();
+
+    // Auditoría: implementación provisional mientras no se conozca el destino real.
+    // Cuando llegue el contrato de audit-log, se cambia SÓLO esta línea por:
+    //     builder.Services.AddScoped<IBiometricAuditPublisher, AuditLogBiometricAuditPublisher>();
+    builder.Services.AddScoped<IBiometricAuditPublisher, LoggingBiometricAuditPublisher>();
+
+
+2. AppSettings.cs
+───────────────────────────────────────────────────────────────────────────────
+Tres propiedades nuevas:
+
+    /// <summary>Interruptor general. En false no se bloquea a nadie, pero se sigue auditando.</summary>
+    public bool BIOMETRIC_ATTEMPT_CONTROL_ENABLED { get; set; } = true;
+
+    /// <summary>Fallos consecutivos que disparan el bloqueo.</summary>
+    public int BIOMETRIC_MAX_FAILED_ATTEMPTS { get; set; } = 5;
+
+    /// <summary>Duración del bloqueo temporal, en minutos.</summary>
+    public int BIOMETRIC_BLOCK_DURATION_MINUTES { get; set; } = 20;
+
+El interruptor no es decoración: si en producción aparece un falso positivo
+masivo (por ejemplo, una versión de la app que envía capturas de mala calidad y
+dispara rechazos legítimos), se apaga el bloqueo SIN DESPLEGAR y la auditoría
+sigue funcionando.
+
+
+3. appsettings.json  ·  dentro de la sección AppSettings existente
+───────────────────────────────────────────────────────────────────────────────
+
+    "BIOMETRIC_ATTEMPT_CONTROL_ENABLED": true,
+    "BIOMETRIC_MAX_FAILED_ATTEMPTS": 5,
+    "BIOMETRIC_BLOCK_DURATION_MINUTES": 20
+
+
+4. ConfigMap de Kubernetes  ·  los tres ambientes
+───────────────────────────────────────────────────────────────────────────────
+
+    AppSettings__BIOMETRIC_ATTEMPT_CONTROL_ENABLED: "true"
+    AppSettings__BIOMETRIC_MAX_FAILED_ATTEMPTS: "5"
+    AppSettings__BIOMETRIC_BLOCK_DURATION_MINUTES: "20"
+
+
+5. Mapeo del 423 en el manejador de excepciones que YA existe
+───────────────────────────────────────────────────────────────────────────────
+Localízalo con:
+
+    grep -rn "IExceptionHandler\|ProblemDetails\|ExceptionMiddleware" --include=*.cs src/
+
+Si es un CustomExceptionHandler con diccionario de mapeos (patrón de la
+plantilla Clean Architecture), añade la entrada y el método:
+
+    { typeof(BiometricAttemptsBlockedException), HandleAttemptsBlockedException }
+
+    private async Task HandleAttemptsBlockedException(HttpContext httpContext, Exception ex)
+    {
+        var blocked = (BiometricAttemptsBlockedException)ex;
+
+        httpContext.Response.StatusCode = StatusCodes.Status423Locked;
+        httpContext.Response.Headers.RetryAfter = blocked.RetryAfterSeconds.ToString();
+
+        var problemDetails = new ProblemDetails
+        {
+            Status = StatusCodes.Status423Locked,
+            Title = "Biometric validation temporarily blocked",
+            Detail = "The customer exceeded the allowed number of failed biometric attempts.",
+            Instance = httpContext.Request.Path
+        };
+
+        problemDetails.Extensions["code"] = BiometricAttemptsBlockedException.ErrorCode;
+        problemDetails.Extensions["isValid"] = false;          // la app lee siempre el mismo campo
+        problemDetails.Extensions["blocked"] = true;
+        problemDetails.Extensions["blockedUntil"] = blocked.BlockedUntil;
+        problemDetails.Extensions["retryAfterSeconds"] = blocked.RetryAfterSeconds;
+
+        await httpContext.Response.WriteAsJsonAsync(problemDetails);
+    }
+
+Tres detalles deliberados:
+
+  · isValid: false también en el 423 → la app lee siempre el mismo campo,
+    responda 200 o 423. No necesita dos rutas de parseo.
+  · retryAfterSeconds además de blockedUntil → un temporizador hecho con
+    blockedUntil depende de que el reloj del teléfono esté sincronizado.
+  · Cabecera Retry-After estándar → para cualquier cliente HTTP genérico.
+
+
+6. Índice único en Mongo
+───────────────────────────────────────────────────────────────────────────────
+En la versión mínima se crea a mano una vez por ambiente, en lugar de añadir un
+IHostedService:
+
+    db.facephi_attempt_control.createIndex({ idT24: 1 }, { unique: true, name: "ux_idT24" })
+
+NO es opcional. Sin él, dos peticiones concurrentes con upsert pueden insertar
+DOS documentos para el mismo cliente, y a partir de ahí cada uno lleva su propio
+contador: el cliente tendría 10 intentos en lugar de 5.
+
+Aprovechando el mismo cambio, conviene crear también el que sigue pendiente en
+la otra colección, que tiene exactamente la misma carrera en su ReplaceOneAsync
+con IsUpsert:
+
+    db.facephi_biometrics.createIndex({ idT24: 1 }, { unique: true, name: "ux_idT24" })
+
+
+7. facade-security
+───────────────────────────────────────────────────────────────────────────────
+CERO cambios de código. handleUpstreamError ya reenvía error.response.status tal
+cual, así que el 423 y su cuerpo pasan íntegros hasta la app.
+
+Lo único recomendable (y opcional en la versión mínima) es documentarlo en
+Swagger, en validateBiometric y validateFaceOnly:
+
+    @ApiResponse({
+      status: 423,
+      description:
+        'Validacion biometrica bloqueada temporalmente por exceso de intentos fallidos.',
+    })
+
+
+8. Verificación antes de cerrar
+───────────────────────────────────────────────────────────────────────────────
+Confirmar que NADA entre el micro y la app remapea el 423: filtros globales del
+facade, middleware de cifrado, APIM.
+
+La forma rápida de cerrarlo: fallar cinco veces la validación en un ambiente de
+pruebas y observar el status QUE RECIBE LA APP, no el que emite el micro.
+
+    for i in 1 2 3 4 5 6; do
+      curl -s -o /dev/null -w "intento $i -> %{http_code}\n" \
+        -X POST http://localhost:5000/api/v1/facephi/validate-face \
+        -H "Content-Type: application/json" -H "requestId: manual-$i" \
+        -d '{"idT24":"999999999","bestImageToken":"<token>"}'
+    done
+    # esperado: 200 200 200 200 200 423
+
+    db.facephi_attempt_control.findOne({ idT24: "999999999" })
+    # esperado: failedAttempts: 5, isBlocked: true, blockedUntil ≈ ahora + 20 min
+
+    # Forzar la expiración sin esperar 20 minutos:
+    db.facephi_attempt_control.updateOne(
+      { idT24: "999999999" },
+      { $set: { blockedUntil: new Date(Date.now() - 1000) } })
+    # el siguiente intento debe devolver 200 y dejar failedAttempts en 0
+
+Y para los eventos de auditoría, mientras el publicador sea el provisional:
+
+    kubectl logs <pod> | grep BIOMETRIC_AUDIT
