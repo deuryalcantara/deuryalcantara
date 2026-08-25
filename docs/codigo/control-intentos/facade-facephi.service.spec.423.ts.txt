@@ -1,0 +1,66 @@
+// facade-security · src/modules/facephi/facephi.service.spec.ts
+//
+// Añadir estas pruebas dentro del describe('validateBiometric') existente.
+// No hay cambio de código en facephi.service.ts: handleUpstreamError ya
+// reenvía error.response.status tal cual, así que el 423 pasa sin tocar nada.
+// Estas pruebas están para que siga siendo cierto: si mañana alguien "normaliza"
+// los errores del facade, el 423 se convertiría en 500 y la app perdería la
+// pantalla de bloqueo. Estas pruebas fallarían antes de que eso llegue a QA.
+
+    it('should propagate 423 when the customer is temporarily blocked', async () => {
+      const blockedBody = {
+        status: 423,
+        title: 'Biometric validation temporarily blocked',
+        code: 'BIOMETRIC_ATTEMPTS_BLOCKED',
+        isValid: false,
+        blocked: true,
+        blockedUntil: '2026-08-25T10:20:00Z',
+        retryAfterSeconds: 1200,
+      };
+
+      (httpService.axiosRef.post as jest.Mock).mockRejectedValue({
+        isAxiosError: true,
+        message: 'Request failed with status code 423',
+        response: { status: 423, data: blockedBody },
+      });
+
+      await expect(
+        service.validateBiometric(payload as any, headers as any),
+      ).rejects.toMatchObject({ status: 423 });
+    });
+
+    it('should propagate the block payload untouched', async () => {
+      // La app necesita blockedUntil y retryAfterSeconds para el temporizador.
+      // Si el facade recorta el cuerpo, Movil tiene que inventarse la cuenta atras.
+      const blockedBody = {
+        code: 'BIOMETRIC_ATTEMPTS_BLOCKED',
+        isValid: false,
+        blocked: true,
+        blockedUntil: '2026-08-25T10:20:00Z',
+        retryAfterSeconds: 1200,
+      };
+
+      (httpService.axiosRef.post as jest.Mock).mockRejectedValue({
+        isAxiosError: true,
+        message: 'Request failed with status code 423',
+        response: { status: 423, data: blockedBody },
+      });
+
+      await expect(
+        service.validateBiometric(payload as any, headers as any),
+      ).rejects.toMatchObject({ response: blockedBody });
+    });
+
+// Y dentro del describe('validateFaceOnly'):
+
+    it('should propagate 423 on the face-only flow too', async () => {
+      (httpService.axiosRef.post as jest.Mock).mockRejectedValue({
+        isAxiosError: true,
+        message: 'Request failed with status code 423',
+        response: { status: 423, data: { code: 'BIOMETRIC_ATTEMPTS_BLOCKED' } },
+      });
+
+      await expect(
+        service.validateFaceOnly({ idT24: '1' } as any, headers as any),
+      ).rejects.toMatchObject({ status: 423 });
+    });

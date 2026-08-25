@@ -1,0 +1,32 @@
+// facade-security · src/modules/facephi/facephi.controller.ts
+//
+// ÚNICO cambio necesario en el controller: documentar el 423 en los dos
+// endpoints de validación. No se añade lógica: el requisito dice explícitamente
+// "No implementar ni duplicar la lógica de intentos" en el facade.
+//
+// Añadir esta línea junto a los demás @ApiResponse de validateBiometric y de
+// validateFaceOnly:
+
+  @ApiResponse({
+    status: 423,
+    description:
+      'Validacion biometrica bloqueada temporalmente por exceso de intentos fallidos. ' +
+      'El cuerpo incluye blockedUntil y retryAfterSeconds, y la cabecera Retry-After ' +
+      'trae los segundos restantes.',
+  })
+
+// Queda así en validateBiometric (extracto):
+//
+//   @ApiOperation({ summary: 'Valida la fotografia del documento contra la captura facial' })
+//   @ApiResponse({ status: 200, description: 'isValid indica si la validacion biometrica fue aprobada o no' })
+//   @ApiResponse({ status: 400, description: 'Datos de entrada invalidos' })
+//   @ApiResponse({ status: 423, description: 'Validacion biometrica bloqueada temporalmente...' })
+//   @ApiResponse({ status: 502, description: 'Facephi no disponible' })
+//   @ApiResponse({ status: 504, description: 'Timeout invocando Facephi' })
+//   @HttpCode(HttpStatus.OK)
+//   @Post('validate-biometric')
+//
+// Y en validateFaceOnly, entre el 404 y el 502.
+//
+// Los endpoints de consulta de documento (GET document/:idT24 y POST document)
+// NO llevan 423: no invocan a FacePhi, luego no son intentos y no se bloquean.
